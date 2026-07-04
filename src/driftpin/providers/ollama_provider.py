@@ -31,7 +31,7 @@ class OllamaProvider(LLMProvider):
 
     def __init__(self, base_url: str, model: str) -> None:
         self._base_url = base_url.rstrip("/")
-        self._model = model
+        self.model = model
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT_SECONDS)
 
     async def validate(self) -> None:
@@ -44,11 +44,11 @@ class OllamaProvider(LLMProvider):
             ) from exc
 
         installed = {m["name"] for m in response.json().get("models", [])}
-        if self._model not in installed and not any(
-            name.startswith(self._model) for name in installed
+        if self.model not in installed and not any(
+            name.startswith(self.model) for name in installed
         ):
             raise ProviderValidationError(
-                f"Model '{self._model}' is not installed in this Ollama instance."
+                f"Model '{self.model}' is not installed in this Ollama instance."
             )
 
     def _to_ollama_messages(self, messages: list[Message], system: str) -> list[dict[str, Any]]:
@@ -63,7 +63,7 @@ class OllamaProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
     ) -> CompletionResult:
         payload: dict[str, Any] = {
-            "model": self._model,
+            "model": self.model,
             "messages": self._to_ollama_messages(messages, system),
             "stream": False,
         }
@@ -111,7 +111,7 @@ class OllamaProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[StreamChunk]:
         payload: dict[str, Any] = {
-            "model": self._model,
+            "model": self.model,
             "messages": self._to_ollama_messages(messages, system),
             "stream": True,
         }
@@ -144,7 +144,7 @@ class OllamaProvider(LLMProvider):
         json_schema: dict[str, Any],
     ) -> CompletionResult:
         payload: dict[str, Any] = {
-            "model": self._model,
+            "model": self.model,
             "messages": self._to_ollama_messages(messages, system),
             "stream": False,
             "format": json_schema,

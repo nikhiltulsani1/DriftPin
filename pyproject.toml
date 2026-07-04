@@ -61,6 +61,9 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B", "SIM", "N"]
 ignore = ["E501"]
 
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

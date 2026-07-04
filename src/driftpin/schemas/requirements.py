@@ -39,7 +39,19 @@ class Requirement(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-class ExtractionAmbiguity(BaseModel):
+class CandidateRequirement(BaseModel):
+    """Raw LLM extraction output, before the registry assigns an ID and stamps
+    the source document's path and hash — the extracting LLM knows neither."""
+
+    title: str
+    description: str
+    source_span: str = Field(
+        description="Verbatim quote from the source document supporting this requirement."
+    )
+    risk_tier: RiskTier
+
+
+class CandidateAmbiguity(BaseModel):
     """A contradiction, gap, or unresolvable ambiguity found during extraction.
 
     Routed to ASSUMPTIONS.md instead of being silently resolved into invented
@@ -48,14 +60,13 @@ class ExtractionAmbiguity(BaseModel):
 
     description: str
     source_span: str
-    source_doc_path: str
 
 
 class ExtractionResult(BaseModel):
     """Raw output of the extraction agent, before registry ID assignment."""
 
-    candidate_requirements: list[Requirement]
-    ambiguities: list[ExtractionAmbiguity] = Field(default_factory=list)
+    candidate_requirements: list[CandidateRequirement]
+    ambiguities: list[CandidateAmbiguity] = Field(default_factory=list)
 
 
 class RegistryFile(BaseModel):

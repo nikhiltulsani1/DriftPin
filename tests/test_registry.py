@@ -3,17 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from driftpin.ingestion.registry import RequirementRegistry, derive_requirement_id
-from driftpin.schemas.requirements import ExtractionResult, Requirement, RiskTier
+from driftpin.schemas.requirements import CandidateRequirement, ExtractionResult, RiskTier
 
 
-def _candidate(span: str, title: str = "A requirement") -> Requirement:
-    return Requirement(
-        requirement_id="placeholder",
+def _candidate(span: str, title: str = "A requirement") -> CandidateRequirement:
+    return CandidateRequirement(
         title=title,
         description="Description text.",
         source_span=span,
-        source_doc_path="prd.md",
-        source_doc_hash="hash-a",
         risk_tier=RiskTier.MEDIUM,
     )
 

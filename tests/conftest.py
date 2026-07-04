@@ -23,6 +23,7 @@ class MockProvider(LLMProvider):
     loudly instead of silently reusing stale responses."""
 
     name = "mock"
+    model = "mock-model"
 
     def __init__(self, responses: list[CompletionResult], valid: bool = True) -> None:
         self._responses = list(responses)

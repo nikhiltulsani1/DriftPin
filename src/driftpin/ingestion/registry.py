@@ -9,9 +9,9 @@ IDs on every run. The extracting LLM never assigns IDs.
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 
+from driftpin.ingestion.text_utils import normalize_whitespace
 from driftpin.schemas.requirements import (
     ExtractionResult,
     RegistryFile,
@@ -28,13 +28,9 @@ def compute_doc_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", text.strip().lower())
-
-
 def derive_requirement_id(source_doc_hash: str, source_span: str) -> str:
     """Stable requirement ID: content-addressed, independent of extraction order."""
-    basis = f"{source_doc_hash}:{_normalize(source_span)}"
+    basis = f"{source_doc_hash}:{normalize_whitespace(source_span)}"
     fingerprint = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:_ID_LENGTH]
     return f"R-{fingerprint}"
 
@@ -89,12 +85,14 @@ class RequirementRegistry:
                 result.append(self.get(requirement_id))  # type: ignore[arg-type]
                 continue
 
-            requirement = candidate.model_copy(
-                update={
-                    "requirement_id": requirement_id,
-                    "source_doc_path": source_doc_path,
-                    "source_doc_hash": source_doc_hash,
-                }
+            requirement = Requirement(
+                requirement_id=requirement_id,
+                title=candidate.title,
+                description=candidate.description,
+                source_span=candidate.source_span,
+                source_doc_path=source_doc_path,
+                source_doc_hash=source_doc_hash,
+                risk_tier=candidate.risk_tier,
             )
             self._file.requirements.append(requirement)
             existing_ids.add(requirement_id)

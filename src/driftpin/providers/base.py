@@ -50,6 +50,7 @@ class LLMProvider(ABC):
     structured JSON output over the same message shape."""
 
     name: str
+    model: str
 
     @abstractmethod
     async def validate(self) -> None:

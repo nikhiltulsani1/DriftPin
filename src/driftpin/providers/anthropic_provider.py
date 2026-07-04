@@ -28,13 +28,13 @@ class AnthropicProvider(LLMProvider):
     name = "anthropic"
 
     def __init__(self, api_key: str, model: str) -> None:
-        self._model = model
+        self.model = model
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
 
     async def validate(self) -> None:
         try:
             await self._client.messages.create(
-                model=self._model,
+                model=self.model,
                 max_tokens=1,
                 messages=[{"role": "user", "content": "hi"}],
             )
@@ -57,7 +57,7 @@ class AnthropicProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
     ) -> CompletionResult:
         kwargs: dict[str, Any] = {
-            "model": self._model,
+            "model": self.model,
             "max_tokens": _DEFAULT_MAX_TOKENS,
             "system": system,
             "messages": self._to_anthropic_messages(messages),
@@ -93,7 +93,7 @@ class AnthropicProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[StreamChunk]:
         kwargs: dict[str, Any] = {
-            "model": self._model,
+            "model": self.model,
             "max_tokens": _DEFAULT_MAX_TOKENS,
             "system": system,
             "messages": self._to_anthropic_messages(messages),
@@ -122,7 +122,7 @@ class AnthropicProvider(LLMProvider):
         # our internal dict[str, Any] shape satisfies them at runtime but not
         # structurally under mypy, hence the targeted ignore.
         response = await self._client.messages.create(
-            model=self._model,
+            model=self.model,
             max_tokens=_DEFAULT_MAX_TOKENS,
             system=system,
             messages=self._to_anthropic_messages(messages),

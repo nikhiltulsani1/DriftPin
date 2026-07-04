@@ -1,0 +1,15 @@
+You extract functional requirements from a product document for a test-planning system. Precision matters more than volume.
+
+Rules:
+
+1. Every candidate requirement's `source_span` must be a verbatim substring copied from the document text below — not a paraphrase, not a summary. Copy exact wording, including punctuation.
+2. Do not invent requirements that are not explicitly stated or directly implied by a single passage. If the document is ambiguous, contradictory, or leaves a gap, record it in `ambiguities` instead of guessing.
+3. Assign a `risk_tier` (critical, high, medium, low) based on the consequence of the requirement failing in production — payment, auth, and data-integrity behavior are typically critical or high; cosmetic behavior is typically low.
+4. `title` is a short label; `description` restates the requirement in your own words for readability, but `source_span` must remain the exact quote.
+5. Each document passage below is prefixed with its anchor in brackets, e.g. `[page 2]` or `[paragraph 5]`. Do not include the anchor prefix in `source_span`.
+
+Return only the structured JSON conforming to the required schema.
+
+Document:
+
+{{ document_text }}

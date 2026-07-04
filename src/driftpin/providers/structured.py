@@ -8,15 +8,18 @@ failures the caller must halt rather than fall back to unvalidated output.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from driftpin.providers.base import LLMProvider, Message
+from driftpin.providers.base import CompletionResult, LLMProvider, Message
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 DEFAULT_MAX_RETRIES = 2
+
+OnAttempt = Callable[[CompletionResult, int], None]
 
 
 class StructuredOutputError(Exception):
@@ -37,8 +40,14 @@ async def complete_structured(
     system: str,
     response_model: type[_ModelT],
     max_retries: int = DEFAULT_MAX_RETRIES,
+    on_attempt: OnAttempt | None = None,
 ) -> tuple[_ModelT, int]:
-    """Returns the validated model instance and the number of attempts used."""
+    """Returns the validated model instance and the number of attempts used.
+
+    `on_attempt`, if given, is invoked once per provider call (success or
+    failure) with the raw CompletionResult and attempt number — the hook the
+    run ledger uses to record every attempt, not just the winning one.
+    """
     schema = response_model.model_json_schema()
     working_messages = list(messages)
     last_error = ""
@@ -46,6 +55,8 @@ async def complete_structured(
 
     for attempt in range(1, max_retries + 2):
         result = await provider.complete_structured(working_messages, system, schema)
+        if on_attempt is not None:
+            on_attempt(result, attempt)
         last_raw = result.content
         try:
             parsed = response_model.model_validate_json(result.content)
