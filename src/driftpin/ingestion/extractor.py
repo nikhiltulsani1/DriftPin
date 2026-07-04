@@ -15,6 +15,7 @@ import jinja2
 from driftpin.ingestion.parsers import SourceBlock
 from driftpin.ingestion.text_utils import normalize_whitespace
 from driftpin.ledger.ledger import RunLedger
+from driftpin.paths import find_repo_dir
 from driftpin.providers.base import CompletionResult, LLMProvider, Message
 from driftpin.providers.structured import complete_structured
 from driftpin.schemas.requirements import CandidateAmbiguity, ExtractionResult
@@ -28,17 +29,8 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _prompts_dir() -> Path:
-    current = Path(__file__).resolve()
-    for parent in current.parents:
-        candidate = parent / "prompts"
-        if candidate.is_dir():
-            return candidate
-    raise FileNotFoundError("Could not locate the prompts/ directory from ingestion/extractor.py")
-
-
 def _render_extraction_prompt(document_text: str) -> str:
-    template_path = _prompts_dir() / "extraction.md.j2"
+    template_path = find_repo_dir("prompts", Path(__file__)) / "extraction.md.j2"
     template = jinja2.Template(template_path.read_text(encoding="utf-8"))
     return template.render(document_text=document_text)
 

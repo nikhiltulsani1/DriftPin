@@ -1,0 +1,6 @@
+name: reviewer
+model_binding: null
+system_prompt: reviewer.md.j2
+tools: []
+output_schema: driftpin.schemas.review.ReviewReport
+max_iterations: 1

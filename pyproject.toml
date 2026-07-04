@@ -45,6 +45,7 @@ dev = [
     "ruff>=0.5,<1",
     "mypy>=1.10,<2",
     "types-PyYAML",
+    "types-openpyxl",
 ]
 
 [project.scripts]

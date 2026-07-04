@@ -1,0 +1,6 @@
+name: test-architect
+model_binding: null
+system_prompt: test_architect.md.j2
+tools: []
+output_schema: driftpin.schemas.strategy.TestStrategy
+max_iterations: 1

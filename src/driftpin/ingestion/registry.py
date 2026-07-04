@@ -57,6 +57,10 @@ class RequirementRegistry:
     def requirements(self) -> list[Requirement]:
         return list(self._file.requirements)
 
+    @property
+    def registry_version(self) -> int:
+        return self._file.registry_version
+
     def get(self, requirement_id: str) -> Requirement | None:
         for requirement in self._file.requirements:
             if requirement.requirement_id == requirement_id:

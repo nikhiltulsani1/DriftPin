@@ -1,0 +1,6 @@
+name: functional-tester
+model_binding: null
+system_prompt: functional_tester.md.j2
+tools: []
+output_schema: driftpin.schemas.test_cases.TestSuite
+max_iterations: 1
