@@ -25,6 +25,7 @@ from driftpin.cli.repl import run_chat_repl
 from driftpin.ingestion.parsers import UnsupportedDocumentFormatError
 from driftpin.providers.base import LLMProvider
 from driftpin.providers.factory import ProviderNotConfiguredError, build_configured_provider
+from driftpin.render.labels import build_requirement_labels, labels_for
 
 app = typer.Typer(
     name="driftpin",
@@ -125,15 +126,16 @@ def generate_strategy(
         raise typer.Exit(code=1) from exc
 
     strategy = outcome.strategy
+    labels = build_requirement_labels([r.requirement_id for r in registry.requirements])
     table = Table(title=f"Strategy {strategy.strategy_id}")
     table.add_column("Scenario")
-    table.add_column("Requirement IDs")
+    table.add_column("Requirements")
     table.add_column("Owning Agent")
     table.add_column("Execution")
     for scenario in strategy.scenarios:
         table.add_row(
             f"{scenario.scenario_id}: {scenario.title}",
-            ", ".join(scenario.requirement_ids),
+            ", ".join(labels_for(scenario.requirement_ids, labels)),
             scenario.owning_agent.value,
             scenario.execution_recommendation.value,
         )

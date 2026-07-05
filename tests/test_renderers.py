@@ -87,19 +87,44 @@ def test_build_header_dedupes_and_sorts_doc_hashes() -> None:
     assert header.source_doc_hashes == ["hash-a", "hash-b"]
 
 
+def test_build_header_includes_source_doc_titles() -> None:
+    requirements = [_requirement()]
+    header = build_header(run_id="run-1", requirements=requirements, registry_version=1)
+
+    assert header.source_doc_titles == ["prd.md"]
+
+
 def test_render_markdown_report_contains_all_sections() -> None:
     header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
     report = render_markdown_report(_pipeline_result(), header)
 
     assert "# Driftpin Test Report" in report
     assert "## Traceability Matrix" in report
-    assert "R-abc12345" in report
+    assert "Req-1" in report
+    assert "R-abc12345" not in report
     assert "## Scenarios" in report
     assert "S-1" in report
     assert "## Test Cases" in report
     assert "TC-1" in report
     assert "## Review" in report
     assert "No blockers found." in report
+
+
+def test_render_markdown_report_substitutes_ids_in_review_summary_prose() -> None:
+    header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
+    result = _pipeline_result()
+    result = result.model_copy(
+        update={
+            "review": result.review.model_copy(
+                update={"summary": "Coverage gap on R-abc12345 (Password reset)."}
+            )
+        }
+    )
+
+    report = render_markdown_report(result, header)
+
+    assert "Coverage gap on Req-1 (Password reset)." in report
+    assert "R-abc12345" not in report
 
 
 def test_save_excel_workbook_writes_expected_sheets(tmp_path: Path) -> None:
@@ -113,8 +138,8 @@ def test_save_excel_workbook_writes_expected_sheets(tmp_path: Path) -> None:
     assert workbook.sheetnames == ["Header", "Traceability Matrix", "Scenarios", "Test Cases", "Review"]
 
     trace_sheet = workbook["Traceability Matrix"]
-    assert trace_sheet["A1"].value == "Requirement ID"
-    assert trace_sheet["A2"].value == "R-abc12345"
+    assert trace_sheet["A1"].value == "Requirement"
+    assert trace_sheet["A2"].value == "Req-1"
 
     cases_sheet = workbook["Test Cases"]
     assert cases_sheet["A2"].value == "TC-1"

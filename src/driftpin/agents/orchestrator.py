@@ -151,10 +151,12 @@ async def run_pipeline(
         on_stage("functional-tester")
 
     tester_def = load_agent_definition("functional-tester")
+    referenced_ids = {rid for s in strategy.scenarios for rid in s.requirement_ids}
     raw_suite = await run_agent(
         tester_def,
         provider,
         context={
+            "requirements": [r for r in requirements if r.requirement_id in referenced_ids],
             "scenarios": strategy.scenarios,
             "suite_id": suite_id,
             "strategy_id": strategy_id,

@@ -31,6 +31,7 @@ from driftpin.cli.actions import (
 from driftpin.ingestion.parsers import UnsupportedDocumentFormatError
 from driftpin.providers.base import LLMProvider
 from driftpin.providers.factory import ProviderNotConfiguredError, build_configured_provider
+from driftpin.render.labels import build_requirement_labels, labels_for
 
 _HELP_TEXT = """[bold]Commands[/bold]
   /help                      Show this message.
@@ -125,12 +126,13 @@ def _handle_requirements(project_root: Path, console: Console) -> None:
         console.print("[yellow]No requirements yet. Use /ingest <doc> first.[/yellow]")
         return
 
+    labels = build_requirement_labels([r.requirement_id for r in registry.requirements])
     table = Table(title="Requirements")
     table.add_column("ID")
     table.add_column("Title")
     table.add_column("Risk Tier")
     for requirement in registry.requirements:
-        table.add_row(requirement.requirement_id, requirement.title, requirement.risk_tier.value)
+        table.add_row(labels[requirement.requirement_id], requirement.title, requirement.risk_tier.value)
     console.print(table)
 
 
@@ -184,15 +186,16 @@ def _handle_strategy(provider: LLMProvider, project_root: Path, console: Console
             return
 
     strategy = outcome.strategy
+    labels = build_requirement_labels([r.requirement_id for r in registry.requirements])
     table = Table(title=f"Strategy {strategy.strategy_id}")
     table.add_column("Scenario")
-    table.add_column("Requirement IDs")
+    table.add_column("Requirements")
     table.add_column("Owning Agent")
     table.add_column("Execution")
     for scenario in strategy.scenarios:
         table.add_row(
             f"{scenario.scenario_id}: {scenario.title}",
-            ", ".join(scenario.requirement_ids),
+            ", ".join(labels_for(scenario.requirement_ids, labels)),
             scenario.owning_agent.value,
             scenario.execution_recommendation.value,
         )

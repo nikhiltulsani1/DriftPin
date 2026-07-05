@@ -1,5 +1,9 @@
 """Excel renderer: the traceability matrix ships as a first-class sheet,
-not a footnote to the test cases."""
+not a footnote to the test cases.
+
+Requirement IDs are shown using the simple `Req-N` display labels built by
+`render/labels.py`, not the registry's real content-addressed IDs.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,12 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from driftpin.agents.orchestrator import PipelineResult
 from driftpin.render.headers import ArtifactHeader
+from driftpin.render.labels import (
+    build_requirement_labels,
+    label_for,
+    labels_for,
+    substitute_labels_in_text,
+)
 
 
 def _write_header_sheet(ws: Worksheet, header: ArtifactHeader) -> None:
@@ -19,15 +29,16 @@ def _write_header_sheet(ws: Worksheet, header: ArtifactHeader) -> None:
     ws.append(["Generator version", header.generator_version])
     ws.append(["Run ID", header.run_id])
     ws.append(["Registry version", header.registry_version])
-    ws.append(["Source document hashes", ", ".join(header.source_doc_hashes)])
+    ws.append(["Source document(s)", ", ".join(header.source_doc_titles)])
+    ws.append(["Source document hash (for verification)", ", ".join(header.source_doc_hashes)])
 
 
-def _write_traceability_sheet(ws: Worksheet, result: PipelineResult) -> None:
-    ws.append(["Requirement ID", "Title", "Risk Tier", "Coverage Count", "Case IDs"])
+def _write_traceability_sheet(ws: Worksheet, result: PipelineResult, labels: dict[str, str]) -> None:
+    ws.append(["Requirement", "Title", "Risk Tier", "Coverage Count", "Case IDs"])
     for row in result.traceability:
         ws.append(
             [
-                row.requirement_id,
+                label_for(row.requirement_id, labels),
                 row.requirement_title,
                 row.risk_tier,
                 row.coverage_count,
@@ -36,12 +47,12 @@ def _write_traceability_sheet(ws: Worksheet, result: PipelineResult) -> None:
         )
 
 
-def _write_scenarios_sheet(ws: Worksheet, result: PipelineResult) -> None:
+def _write_scenarios_sheet(ws: Worksheet, result: PipelineResult, labels: dict[str, str]) -> None:
     ws.append(
         [
             "Scenario ID",
             "Title",
-            "Requirement IDs",
+            "Requirements",
             "Owning Agent",
             "Risk Tier",
             "Execution Recommendation",
@@ -53,7 +64,7 @@ def _write_scenarios_sheet(ws: Worksheet, result: PipelineResult) -> None:
             [
                 scenario.scenario_id,
                 scenario.title,
-                ", ".join(scenario.requirement_ids),
+                ", ".join(labels_for(scenario.requirement_ids, labels)),
                 scenario.owning_agent.value,
                 scenario.risk_tier.value,
                 scenario.execution_recommendation.value,
@@ -62,12 +73,12 @@ def _write_scenarios_sheet(ws: Worksheet, result: PipelineResult) -> None:
         )
 
 
-def _write_test_cases_sheet(ws: Worksheet, result: PipelineResult) -> None:
+def _write_test_cases_sheet(ws: Worksheet, result: PipelineResult, labels: dict[str, str]) -> None:
     ws.append(
         [
             "Case ID",
             "Scenario ID",
-            "Requirement IDs",
+            "Requirements",
             "Title",
             "Preconditions",
             "Steps",
@@ -81,7 +92,7 @@ def _write_test_cases_sheet(ws: Worksheet, result: PipelineResult) -> None:
             [
                 case.case_id,
                 case.scenario_id,
-                ", ".join(case.requirement_ids),
+                ", ".join(labels_for(case.requirement_ids, labels)),
                 case.title,
                 case.preconditions,
                 steps_text,
@@ -91,32 +102,34 @@ def _write_test_cases_sheet(ws: Worksheet, result: PipelineResult) -> None:
         )
 
 
-def _write_review_sheet(ws: Worksheet, result: PipelineResult) -> None:
+def _write_review_sheet(ws: Worksheet, result: PipelineResult, labels: dict[str, str]) -> None:
     ws.append(["Passed", result.review.passed])
-    ws.append(["Summary", result.review.summary])
+    ws.append(["Summary", substitute_labels_in_text(result.review.summary, labels)])
     ws.append([])
-    ws.append(["Severity", "Subject ID", "Description", "Requirement IDs"])
+    ws.append(["Severity", "Subject ID", "Description", "Requirements"])
     for finding in result.review.findings:
         ws.append(
             [
                 finding.severity.value,
                 finding.subject_id,
                 finding.description,
-                ", ".join(finding.requirement_ids),
+                ", ".join(labels_for(finding.requirement_ids, labels)),
             ]
         )
 
 
 def build_excel_workbook(result: PipelineResult, header: ArtifactHeader) -> Workbook:
+    labels = build_requirement_labels([row.requirement_id for row in result.traceability])
+
     workbook = Workbook()
     header_sheet = workbook.active
     assert header_sheet is not None
     _write_header_sheet(header_sheet, header)
 
-    _write_traceability_sheet(workbook.create_sheet("Traceability Matrix"), result)
-    _write_scenarios_sheet(workbook.create_sheet("Scenarios"), result)
-    _write_test_cases_sheet(workbook.create_sheet("Test Cases"), result)
-    _write_review_sheet(workbook.create_sheet("Review"), result)
+    _write_traceability_sheet(workbook.create_sheet("Traceability Matrix"), result, labels)
+    _write_scenarios_sheet(workbook.create_sheet("Scenarios"), result, labels)
+    _write_test_cases_sheet(workbook.create_sheet("Test Cases"), result, labels)
+    _write_review_sheet(workbook.create_sheet("Review"), result, labels)
 
     return workbook
 

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from driftpin.agents.orchestrator import build_traceability_matrix, run_pipeline
 from driftpin.ledger.ledger import RunLedger
-from driftpin.providers.base import CompletionResult
+from driftpin.providers.base import CompletionResult, LLMProvider, Message, ToolDefinition
 from driftpin.schemas.requirements import Requirement, RiskTier
 from driftpin.schemas.test_cases import TestCase as CaseModel
 from driftpin.schemas.test_cases import TestStep as StepModel
@@ -140,3 +141,101 @@ async def test_run_pipeline_raises_on_empty_requirements(mock_provider_factory) 
     provider = mock_provider_factory([])
     with pytest.raises(ValueError, match="empty"):
         await run_pipeline(provider, [], run_id="run1")
+
+
+class _SystemPromptCapturingProvider(LLMProvider):
+    """Records every rendered system prompt it's called with, so a test can
+    assert on what the functional-tester template actually produced — not
+    just on the canned response it was fed back."""
+
+    name = "mock"
+    model = "mock-model"
+
+    def __init__(self, responses: list[CompletionResult]) -> None:
+        self._responses = list(responses)
+        self.system_prompts: list[str] = []
+
+    async def validate(self) -> None:
+        return None
+
+    async def complete(
+        self, messages: list[Message], system: str, tools: list[ToolDefinition] | None = None
+    ) -> CompletionResult:
+        return self._next_response(system)
+
+    async def stream(self, messages: list[Message], system: str, tools: list[ToolDefinition] | None = None):
+        result = self._next_response(system)
+        yield result  # pragma: no cover - unused by complete_structured path
+
+    async def complete_structured(
+        self, messages: list[Message], system: str, json_schema: dict[str, Any]
+    ) -> CompletionResult:
+        return self._next_response(system)
+
+    def _next_response(self, system: str) -> CompletionResult:
+        self.system_prompts.append(system)
+        return self._responses.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_functional_tester_prompt_only_includes_scenario_referenced_requirements(
+    tmp_path: Path,
+) -> None:
+    requirements = [
+        _requirement("R-1", title="Password Reset Requirement"),
+        _requirement("R-2", title="Unrelated Reporting Requirement"),
+    ]
+
+    strategy_payload = {
+        "strategy_id": "strategy-run1",
+        "scenarios": [
+            {
+                "scenario_id": "S-1",
+                "title": "Password reset scenario",
+                "requirement_ids": ["R-1"],
+                "owning_agent": "functional-tester",
+                "risk_tier": "high",
+                "execution_recommendation": "manual",
+                "recommendation_justification": "Low run frequency, high setup cost.",
+            }
+        ],
+        "coverage_notes": "",
+    }
+    suite_payload = {
+        "suite_id": "suite-run1",
+        "strategy_id": "strategy-run1",
+        "cases": [
+            {
+                "case_id": "TC-1",
+                "scenario_id": "S-1",
+                "requirement_ids": ["R-1"],
+                "title": "Covers R-1",
+                "preconditions": "",
+                "steps": [{"step_number": 1, "action": "do", "expected_result": "ok"}],
+                "owning_agent": "functional-tester",
+                "execution_recommendation": "manual",
+            }
+        ],
+    }
+    review_payload = {
+        "review_id": "review-run1",
+        "target_run_id": "run1",
+        "findings": [],
+        "passed": True,
+        "summary": "All good.",
+    }
+
+    provider = _SystemPromptCapturingProvider(
+        [
+            CompletionResult(content=json.dumps(strategy_payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
+            CompletionResult(content=json.dumps(suite_payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
+            CompletionResult(content=json.dumps(review_payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
+        ]
+    )
+    ledger = RunLedger(tmp_path, run_id="run1")
+
+    await run_pipeline(provider, requirements, run_id="run1", ledger=ledger)
+
+    functional_tester_prompt = provider.system_prompts[1]
+    assert "Password Reset Requirement" in functional_tester_prompt
+    assert "Unrelated Reporting Requirement" not in functional_tester_prompt
