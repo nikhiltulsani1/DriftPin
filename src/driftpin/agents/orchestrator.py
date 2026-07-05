@@ -9,6 +9,8 @@ machinery is explicitly out of scope for this system.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pydantic import BaseModel
 
 from driftpin.agents.loader import load_agent_definition
@@ -19,6 +21,8 @@ from driftpin.schemas.requirements import Requirement
 from driftpin.schemas.review import ReviewReport
 from driftpin.schemas.strategy import Scenario, TestStrategy
 from driftpin.schemas.test_cases import TestCase, TestSuite, TraceabilityRow
+
+OnStage = Callable[[str], None]
 
 
 class PipelineResult(BaseModel):
@@ -110,9 +114,13 @@ async def generate_strategy_only(
     requirements: list[Requirement],
     run_id: str,
     ledger: RunLedger | None = None,
+    on_stage: OnStage | None = None,
 ) -> TestStrategy:
     if not requirements:
         raise ValueError("Cannot run the generation pipeline against an empty requirement set.")
+
+    if on_stage is not None:
+        on_stage("test-architect")
 
     strategy_id = f"strategy-{run_id}"
     architect_def = load_agent_definition("test-architect")
@@ -131,12 +139,16 @@ async def run_pipeline(
     requirements: list[Requirement],
     run_id: str,
     ledger: RunLedger | None = None,
+    on_stage: OnStage | None = None,
 ) -> PipelineResult:
     strategy_id = f"strategy-{run_id}"
     suite_id = f"suite-{run_id}"
     review_id = f"review-{run_id}"
 
-    strategy = await generate_strategy_only(provider, requirements, run_id, ledger)
+    strategy = await generate_strategy_only(provider, requirements, run_id, ledger, on_stage)
+
+    if on_stage is not None:
+        on_stage("functional-tester")
 
     tester_def = load_agent_definition("functional-tester")
     raw_suite = await run_agent(
@@ -151,6 +163,9 @@ async def run_pipeline(
     )
     assert isinstance(raw_suite, TestSuite)
     suite = _filter_cases_to_known_scenarios(raw_suite, strategy, ledger)
+
+    if on_stage is not None:
+        on_stage("reviewer")
 
     reviewer_def = load_agent_definition("reviewer")
     raw_review = await run_agent(

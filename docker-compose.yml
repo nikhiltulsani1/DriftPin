@@ -1,0 +1,26 @@
+services:
+  driftpin:
+    build: .
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+    stdin_open: true
+    tty: true
+
+  # Optional: only starts with `docker compose --profile local-model up`.
+  # Lets `driftpin init` target a local model without installing Ollama on
+  # the host.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-model"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  ollama_data:
