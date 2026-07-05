@@ -14,11 +14,62 @@ Most "AI writes tests" tools optimize for volume: generate a pile of Playwright 
 
 ## Status
 
-Early build. Release 1 (interactive CLI, PRD ingestion, requirement registry, strategy and test-case generation with a traceability matrix) is in progress. See the release plan in `DESIGN_DECISIONS.md` once it lands.
+Release 1 is code-complete: ingestion, requirement registry, agent pipeline, renderers, CLI, REPL, and Docker packaging all work end to end. The actual gate — scoring generated output against a human-authored golden PRD — hasn't run yet; that needs live provider credentials. See [EVALS.md](EVALS.md) for what's scored and what's still pending, and [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) for the reasoning behind the architecture below.
 
 ## Architecture
 
-Python 3.11+ core, no Node dependency for the CLI. Agents are declared as YAML (`agents/`) bound to a provider-agnostic `LLMProvider` interface — Anthropic and Ollama at launch, OpenAI later. Every agent output is schema-validated pydantic before any renderer touches it. Every LLM call, tool call, and subprocess execution is appended to a per-run ledger; that ledger is the only accepted evidence that something actually ran.
+Python 3.11+ core, no Node dependency. Every agent output is schema-validated pydantic before any renderer touches it — the LLM never writes a binary artifact directly. Every LLM call, including failed structured-output attempts, is appended to a per-run ledger; that ledger is the only accepted evidence that something actually ran.
+
+```mermaid
+flowchart LR
+    subgraph Ingestion
+        Doc[PRD: PDF/DOCX/MD/TXT] --> Parser[Document Parser]
+        Parser --> Extractor[Requirement Extractor]
+        Extractor --> Registry[(Requirement Registry\ncontent-addressed IDs)]
+        Parser --> Chroma[(ChromaDB\nchunk store)]
+    end
+
+    subgraph Generation
+        Registry --> Architect[test-architect]
+        Architect --> Tester[functional-tester]
+        Tester --> Reviewer[reviewer]
+        Architect -. guard rails .-> Orchestrator[Orchestrator\ndeterministic merge]
+        Tester -. guard rails .-> Orchestrator
+    end
+
+    subgraph Output
+        Reviewer --> Excel[Excel report\ntraceability matrix]
+        Reviewer --> Markdown[Markdown report]
+    end
+
+    Registry --> Architect
+    Provider[LLMProvider\nAnthropic / Groq / Ollama] -.-> Architect
+    Provider -.-> Tester
+    Provider -.-> Reviewer
+    Architect -.-> Ledger[(Run Ledger)]
+    Tester -.-> Ledger
+    Reviewer -.-> Ledger
+```
+
+Key pieces:
+
+- **Provider layer** (`providers/`) — one `LLMProvider` interface; Anthropic, Groq, and Ollama implemented, OpenAI planned for Release 3. A new provider is one new file.
+- **Requirement registry** (`ingestion/registry.py`) — the system's central data structure. IDs are content-addressed (hash of source doc + verbatim requirement text), never assigned by the extracting LLM, so re-ingesting an unchanged PRD produces identical IDs regardless of extraction order.
+- **Extraction guard rail** (`ingestion/extractor.py`) — every candidate requirement's source span is verified as a verbatim substring of the actual document after extraction. A quote that can't be found gets demoted to a flagged ambiguity, never trusted into the registry.
+- **Agents as config** (`agents/*.yaml` + `prompts/*.md.j2`) — test-architect, functional-tester, and reviewer are declared, not hardcoded; one generic runtime (`agents/runtime.py`) executes all three against their schema.
+- **Deterministic orchestrator** (`agents/orchestrator.py`) — runs the pipeline and merges output with guard-rail code, not council mode or model debate. A scenario or test case referencing an unknown requirement gets dropped and logged to `ASSUMPTIONS.md`, never silently trusted.
+- **Renderers** (`render/`) — Excel (traceability matrix as a first-class sheet) and Markdown, both stamped with generator version, run ID, registry version, and source-doc hashes.
+- **CLI + REPL** (`cli/`) — one action layer (`cli/actions.py`) backs both the one-shot commands and the interactive `driftpin chat` session, so a run behaves identically either way.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `driftpin init` | Configure the provider (Anthropic, Groq, or a local Ollama model) for this project. |
+| `driftpin ingest --docs <path>...` | Parse documents, extract requirements, merge into the registry. |
+| `driftpin chat` | Interactive session — `/ingest`, `/requirements`, `/strategy`, `/cases`, `/status`. |
+| `driftpin generate strategy --out <dir>` | Generate scenarios from the registry, no cases yet. |
+| `driftpin generate cases --out <dir>` | Full pipeline — Excel + Markdown reports with the traceability matrix. |
 
 ## Setup
 
@@ -27,7 +78,17 @@ pip install -e ".[dev]"
 driftpin init
 ```
 
-`init` walks through provider selection (Anthropic API key or a local Ollama model), validates the connection, and for local models runs a structured-output conformance probe before trusting it with schema-first agents.
+`init` walks through provider selection, validates the connection (a real API call for Anthropic/Groq, a reachability + conformance probe for Ollama), and for local models runs a structured-output conformance probe before trusting it with schema-first agents.
+
+## Docker
+
+```
+docker compose build
+docker compose run --rm driftpin --help
+docker compose run --rm driftpin ingest --docs samples/password_reset_prd.md --project-root /workspace
+```
+
+The repo is mounted at `/workspace`; `.driftpin/`, ingested docs, and generated artifacts all live there. An optional local Ollama service is available behind a compose profile: `docker compose --profile local-model up`.
 
 ## License
 
