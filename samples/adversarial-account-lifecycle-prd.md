@@ -4,8 +4,9 @@ STAKEHOLDER:  Product
 PRIORITY:     P1
 
 ## Overview
-This document describes account creation, deletion, and data-retention behavior
-for the platform. Note: this draft has not yet been reconciled with Legal or
+This document describes account creation, account deletion, password reset,
+and a referral program that credits both users when a referred friend
+completes signup. Note: this draft has not yet been reconciled with Legal or
 Security sign-off; some sections reflect conflicting inputs from different
 stakeholders and are intentionally left as-is pending a follow-up review.
 
@@ -34,6 +35,11 @@ R-05: The system shall support SSO login via the organization's standard
 
 R-06: Account merge requests (combining two accounts into one) are handled
       per the existing account-merge policy.
+
+R-07: The account settings page must load quickly and feel responsive to
+      the user.
+
+R-08: Notification preferences — TBD, pending design review.
 
 ## Out of Scope
 - Data residency requirements for non-US regions

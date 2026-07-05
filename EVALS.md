@@ -102,6 +102,50 @@ requirement — that's a real, narrower gap than the original claim might
 imply, worth fixing with either near-duplicate detection or boundary
 normalization in a future pass, not something to gloss over.
 
+**Second hardening round — gaps, not just conflicts:** the categories above
+(contradictions, dangling references) are all about requirements that
+conflict with each other or with unseen content. A separate, real failure
+mode is a PRD that's simply too thin — vague requirements, or a capability
+mentioned once and never actually specified. Extended the adversarial PRD
+with three more cases and re-ran three times as the prompt was iterated:
+
+- **Vague/unmeasurable requirement** ("the account settings page must load
+  quickly and feel responsive to the user," no threshold given) — caught
+  correctly on the first attempt and every attempt after.
+- **Requirement fragment** ("Notification preferences — TBD, pending design
+  review") — caught correctly on the first attempt and every attempt after.
+- **Capability named in the overview but never given its own requirement**
+  — three attempts across two prompt revisions failed to catch this, and one
+  attempt produced a false positive in the opposite direction (flagging an
+  "Out of Scope" item as if it were an unspecified capability — wrong by
+  definition, since Out of Scope is a deliberate exclusion, not a gap; fixed
+  by explicitly telling the prompt to skip Out of Scope/Non-Goals sections).
+
+  On investigation, the test case itself was confounded: the phrasing used
+  ("...data-retention behavior for the platform, including session activity
+  export for compliance audits") reads as an elaboration of a requirement
+  that already exists (R-02, data retention), not as an independent
+  capability — a careful reader could reasonably conclude it's already
+  covered. That's different from a genuinely independent, unrelated mention.
+  Rewrote the test case to name something with zero thematic overlap to any
+  existing requirement (a referral program crediting both users on a
+  friend's signup) and added a worked example to the prompt itself,
+  modeled on a different domain (login/payment/receipt-emailing) to avoid
+  teaching the model to pattern-match the literal test wording. Result:
+  **caught correctly**, alongside all six other categories, in a single run
+  — 7 of 7 ambiguity types flagged, still 8/8 requirements extracted
+  verbatim with zero fabrication.
+
+  Re-ran the fully hardened prompt against the real golden PRD
+  (`evals/golden/prd-1-voice-assistant-fab.md`, a normal, well-specified
+  document, not adversarial) to check for false positives from all this
+  hardening: 11/11 requirements extracted, same as before hardening began.
+  One ambiguity appeared — a candidate for R-10 whose proposed quote used a
+  single-quote character where the source document uses a double quote,
+  caught by the pre-existing verbatim source-span check, unrelated to any of
+  the new contradiction/gap rules. Zero new false positives from the
+  hardening itself.
+
 ## Regressions
 
 **Schema validation gap (found and fixed 2026-07-05):** an independent
