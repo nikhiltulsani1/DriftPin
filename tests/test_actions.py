@@ -8,6 +8,7 @@ import pytest
 from driftpin.cli.actions import (
     DocumentNotFoundError,
     EmptyRegistryError,
+    artifact_filename,
     open_registry,
     run_generate_cases,
     run_generate_strategy,
@@ -37,6 +38,27 @@ def _requirement(req_id: str = "R-1") -> Requirement:
         source_doc_hash="hash-a",
         risk_tier=RiskTier.HIGH,
     )
+
+
+def test_artifact_filename_includes_prefix_timestamp_and_run_id() -> None:
+    filename = artifact_filename("cases", "abc123def456", "xlsx")
+
+    assert filename.startswith("cases_")
+    assert filename.endswith("_abc123def456.xlsx")
+    # "cases_20260705-113906_abc123def456.xlsx" -> timestamp segment is 15 chars (YYYYMMDD-HHMMSS)
+    timestamp_segment = filename.removeprefix("cases_").removesuffix("_abc123def456.xlsx")
+    assert len(timestamp_segment) == 15
+    assert timestamp_segment[8] == "-"
+
+
+def test_artifact_filename_differs_by_prefix_and_extension() -> None:
+    excel_name = artifact_filename("cases", "run1", "xlsx")
+    markdown_name = artifact_filename("cases", "run1", "md")
+    strategy_name = artifact_filename("strategy", "run1", "json")
+
+    assert excel_name != markdown_name
+    assert excel_name.startswith("cases_")
+    assert strategy_name.startswith("strategy_")
 
 
 @pytest.mark.asyncio

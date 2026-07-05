@@ -13,6 +13,7 @@ from rich.table import Table
 from driftpin.cli.actions import (
     DocumentNotFoundError,
     EmptyRegistryError,
+    artifact_filename,
     open_registry,
     run_generate_cases,
     run_generate_strategy,
@@ -138,7 +139,7 @@ def generate_strategy(
     console.print(table)
 
     out.mkdir(parents=True, exist_ok=True)
-    strategy_path = out / f"{strategy.strategy_id}.json"
+    strategy_path = out / artifact_filename("strategy", outcome.run_id, "json")
     strategy_path.write_text(strategy.model_dump_json(indent=2), encoding="utf-8")
     console.print(f"Strategy saved to {strategy_path}")
     console.print(f"Ledger: {outcome.ledger.ledger_path}")

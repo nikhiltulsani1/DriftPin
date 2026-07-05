@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from driftpin.agents.orchestrator import (
@@ -43,6 +44,16 @@ class EmptyRegistryError(Exception):
 
 def new_run_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def artifact_filename(prefix: str, run_id: str, extension: str) -> str:
+    """A run ID alone (`3a1c93821313.xlsx`) isn't self-describing in a
+    directory listing — it doesn't say what kind of artifact it is or when it
+    ran. Every generated file is named `<prefix>_<timestamp>_<run_id>.<ext>`
+    instead: sortable chronologically, identifiable at a glance, and the run
+    ID is still there verbatim for cross-referencing against the ledger."""
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    return f"{prefix}_{timestamp}_{run_id}.{extension}"
 
 
 def open_registry(project_root: Path) -> RequirementRegistry:
@@ -165,8 +176,8 @@ async def run_generate_cases(
         registry_version=registry.registry_version,
     )
     out_dir.mkdir(parents=True, exist_ok=True)
-    excel_path = out_dir / f"{run_id}.xlsx"
-    markdown_path = out_dir / f"{run_id}.md"
+    excel_path = out_dir / artifact_filename("cases", run_id, "xlsx")
+    markdown_path = out_dir / artifact_filename("cases", run_id, "md")
     save_excel_workbook(pipeline_result, header, excel_path)
     markdown_path.write_text(render_markdown_report(pipeline_result, header), encoding="utf-8")
 
