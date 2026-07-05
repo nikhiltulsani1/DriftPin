@@ -11,6 +11,16 @@ from driftpin.providers.groq_provider import GroqProvider
 from driftpin.providers.ollama_provider import OllamaProvider
 
 
+@pytest.fixture(autouse=True)
+def _no_real_keyring(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests must not depend on whatever is actually stored in the host
+    OS keyring — a real `driftpin init` run on this machine would otherwise
+    make the "raises without key" tests pass or fail based on machine state
+    rather than the code under test."""
+    monkeypatch.setattr("driftpin.config.secrets.keyring.get_password", lambda *a, **k: None)
+    monkeypatch.setattr("driftpin.config.secrets.keyring.set_password", lambda *a, **k: None)
+
+
 def _write_config(project_root: Path, kind: str, model: str, base_url: str | None = None) -> None:
     driftpin_dir = project_root / ".driftpin"
     driftpin_dir.mkdir(parents=True, exist_ok=True)

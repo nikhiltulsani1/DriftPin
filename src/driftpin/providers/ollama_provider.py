@@ -23,7 +23,24 @@ from driftpin.providers.base import (
     ToolDefinition,
 )
 
-_DEFAULT_TIMEOUT_SECONDS = 120.0
+# Local CPU inference generating a large structured JSON response (many
+# scenarios/test cases at once) can genuinely take several minutes — this
+# needs to be generous, not cloud-API-latency-sized.
+_DEFAULT_TIMEOUT_SECONDS = 600.0
+
+
+def _raise_for_status_with_body(response: httpx.Response) -> None:
+    """`raise_for_status()` alone drops Ollama's actual error message (e.g.
+    "model requires more system memory", a context-length overflow, or an
+    invalid `format` schema) — that detail lives in the JSON body."""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise httpx.HTTPStatusError(
+            f"{exc}\nResponse body: {response.text}",
+            request=exc.request,
+            response=exc.response,
+        ) from exc
 
 
 class OllamaProvider(LLMProvider):
@@ -81,7 +98,7 @@ class OllamaProvider(LLMProvider):
             ]
 
         response = await self._client.post("/api/chat", json=payload)
-        response.raise_for_status()
+        _raise_for_status_with_body(response)
         return self._parse_response(response.json())
 
     def _parse_response(self, data: dict[str, Any]) -> CompletionResult:
@@ -150,5 +167,5 @@ class OllamaProvider(LLMProvider):
             "format": json_schema,
         }
         response = await self._client.post("/api/chat", json=payload)
-        response.raise_for_status()
+        _raise_for_status_with_body(response)
         return self._parse_response(response.json())

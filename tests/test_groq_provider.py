@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from driftpin.providers.base import Message, ProviderValidationError, ToolDefinition
-from driftpin.providers.groq_provider import GroqProvider
+from driftpin.providers.groq_provider import GroqProvider, _parse_retry_after_seconds
 
 
 def _client_with_transport(handler):
@@ -137,6 +137,113 @@ async def test_complete_structured_forces_tool_choice_and_parses_arguments(
 
     assert json.loads(result.content) == {"value": "ok"}
     assert captured_payloads[0]["tool_choice"]["function"]["name"] == "emit_structured_output"
+
+
+def test_parse_retry_after_seconds_extracts_value_from_message() -> None:
+    assert _parse_retry_after_seconds("Please try again in 21.46s.") == 21.46
+
+
+def test_parse_retry_after_seconds_falls_back_when_unparseable() -> None:
+    assert _parse_retry_after_seconds("no timing info here") == 10.0
+
+
+@pytest.mark.asyncio
+async def test_complete_structured_returns_failed_generation_on_tool_use_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": "Failed to call a function. Please adjust your prompt.",
+                    "type": "invalid_request_error",
+                    "code": "tool_use_failed",
+                    "failed_generation": '<function=emit_structured_output>{"value": "broken"',
+                }
+            },
+        )
+
+    monkeypatch.setattr(
+        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+    )
+    provider = GroqProvider(api_key="test-key", model="llama-3.1-8b-instant")
+
+    result = await provider.complete_structured(
+        [Message(role="user", content="go")],
+        system="sys",
+        json_schema={"type": "object"},
+    )
+
+    assert result.stop_reason == "tool_use_failed"
+    assert "emit_structured_output" in result.content
+
+
+@pytest.mark.asyncio
+async def test_complete_structured_retries_on_rate_limit_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(
+                429,
+                json={"error": {"message": "Rate limit reached. Please try again in 0.01s."}},
+            )
+        return _chat_response(
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "emit_structured_output",
+                        "arguments": json.dumps({"value": "ok"}),
+                    },
+                }
+            ]
+        )
+
+    monkeypatch.setattr(
+        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+    )
+    provider = GroqProvider(api_key="test-key", model="llama-3.1-8b-instant")
+
+    result = await provider.complete_structured(
+        [Message(role="user", content="go")], system="sys", json_schema={"type": "object"}
+    )
+
+    assert call_count == 2
+    assert json.loads(result.content) == {"value": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_complete_structured_raises_after_exhausting_rate_limit_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(
+            429,
+            json={"error": {"message": "Rate limit reached. Please try again in 0.01s."}},
+        )
+
+    monkeypatch.setattr(
+        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+    )
+    provider = GroqProvider(api_key="test-key", model="llama-3.1-8b-instant")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await provider.complete_structured(
+            [Message(role="user", content="go")], system="sys", json_schema={"type": "object"}
+        )
+
+    assert call_count == 4  # initial attempt + 3 retries
 
 
 @pytest.mark.asyncio

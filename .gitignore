@@ -1,6 +1,7 @@
 .driftpin/
 .claude/
 CLAUDE.md
+out/
 
 __pycache__/
 *.py[cod]

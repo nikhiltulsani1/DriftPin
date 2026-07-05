@@ -127,6 +127,13 @@ that reflects real pipeline transitions via an `on_stage` callback — not a
 synthetic token stream, since the current structured-output calls are
 single-shot rather than incrementally streamed.
 
+**Forward note (Release 2 plan revision):** `driftpin chat`'s slash-command
+dispatch is planned to be replaced by `driftpin run` as the primary pipeline
+entry point once Release 2 lands — see "Three honest CLI entry points"
+below. `chat`'s underlying action layer (`cli/actions.py`) doesn't change;
+what changes is the front-end shape and the addition of natural-language
+routing ahead of it.
+
 ## Groq added to the provider roster ahead of schedule
 
 The original plan scoped Release 1 to Anthropic and Ollama, with OpenAI
@@ -139,6 +146,85 @@ implementation reuses the same forced-tool-call structured-output strategy as
 Anthropic, since Groq's API is OpenAI-compatible and supports the same
 tool-choice forcing. Adding it cost one file and some wiring, not a
 rearchitecture. That's the abstraction working as intended.
+
+## Selenium added alongside Playwright as an automation target (Release 2)
+
+The original plan scoped `automation-engineer` to Playwright only (Python or
+TS, user's choice). Selenium is added as a second supported target at
+explicit request. This is a scope amendment to Release 2, which isn't built
+yet — no automation-engineer code exists at the time of this entry. The
+framework choice becomes a third dimension the agent's config needs to carry
+(alongside language and sink), the same way provider choice already is: one
+more generation target, not a different architecture. Page Object Model,
+the self-heal loop, and healing provenance apply identically regardless of
+which framework produced the script — those are properties of the loop, not
+of Playwright specifically. When automation-engineer is actually built, the
+framework selection belongs in the same place execution_recommendation
+already lives on a test case, so a case tagged `automate` carries which
+framework it targets.
+
+## Three honest CLI entry points, no mode-switching (Release 2 plan revision)
+
+Release 2's original scope (self-healing automation, requirement triage) is
+unchanged in substance but is now preceded by a restructuring of the CLI
+itself, recorded here before any of it is built:
+
+```
+driftpin init  → setup wizard (already built, Release 1)
+driftpin run   → transactional pipeline, deterministic stages, human controls sequencing
+driftpin edit  → post-generation artifact mutation session, natural language in, modified artifacts out
+```
+
+`driftpin run` takes over as the primary pipeline entry point, replacing
+`driftpin chat`'s slash-command dispatch for that job. On completion it asks
+"Enter edit session? [y/N]" — accepting hands off directly to `driftpin
+edit` with the current run's artifacts loaded; `--yes` skips the prompt for
+CI. The three commands are three different *kinds* of interaction — setup,
+pipeline execution, artifact mutation — not three flavors of the same loop
+with different prompts. Naming them honestly (rather than folding
+everything into one "smart" `chat` command that secretly branches on intent)
+is deliberate: a user should be able to predict what a command does from its
+name alone.
+
+**Natural language intent routing** sits ahead of dispatch in interactive
+mode, replacing the need to remember slash commands, but it is a
+classifier, not a reasoning step: it returns `{action, confidence}` and nothing
+else. Below a confidence threshold (0.75) it asks "Did you mean: run, edit,
+status, export?" rather than guessing — silently routing a low-confidence
+interpretation to the wrong action is worse than asking. Slash commands skip
+classification entirely, so an interactive power-user typing `/cases` is
+never slowed down by a routing step they didn't ask for. The classifier
+runs on the cheapest available model (e.g. Groq `llama-3.1-8b-instant`) and
+never shares call budget or ledger accounting with the pipeline agents —
+routing "what did the user mean" is a fundamentally cheaper, different task
+than generating a test strategy, and conflating their cost tracking would
+make the ledger's token/cost numbers misleading.
+
+## `driftpin edit` is an artifact mutation session, not an agentic loop (Release 2)
+
+The model receives the current requirement registry, the current test case
+list, and a natural-language instruction; it returns one structured
+`EditOperation` (add/modify/remove, with `requirement_ids`, `steps`,
+`execution_rec`, and a `reason`); Python validates it against the registry
+and applies it. The user sees exactly what changed before it's written, and
+approves every removal explicitly.
+
+This is deliberate: an agent that autonomously rewrites test cases without
+human checkpoints would be untraceable and unauditable for a QA tool — the
+whole point of the requirement registry and the run ledger is that every
+artifact's provenance is reconstructable, and an unsupervised agentic
+edit loop breaks that the moment it decides on its own to add, remove, or
+reinterpret a case. Natural language input does not imply agentic
+behavior — those are different properties, and this system deliberately
+has the first without the second. Concretely: unknown requirement IDs are
+rejected before anything is applied, a removal always asks for confirmation
+naming what it removes and which requirement it covered, an edit that would
+leave any requirement at zero cases warns before applying, and a single
+edit turn is capped at 10 operations — a mutation big enough to exceed that
+gets broken into multiple instructions instead of one large, harder-to-audit
+turn. Every edit turn — instruction text, operations applied, requirement
+IDs touched, tokens used, model — lands in the ledger exactly like a
+pipeline run does.
 
 ## Why mutation scoring will matter more than "tests pass" (Release 2)
 

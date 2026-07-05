@@ -8,6 +8,7 @@ written into any run artifact.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import stat
 from pathlib import Path
@@ -22,19 +23,37 @@ _STORE_FILE_NAME = "secrets.enc"
 
 
 class SecretStore:
-    """Reads and writes provider API keys, preferring the OS keyring."""
+    """Reads and writes provider API keys, preferring the OS keyring.
+
+    The OS keyring has no notion of "project" — it's one flat namespace per
+    (service, username) pair for the whole machine. Keyring entries are
+    scoped by hashing the resolved `.driftpin/` path into the lookup key, so
+    two Driftpin projects with different provider credentials on the same
+    machine don't silently overwrite each other. `get()` still falls back to
+    the pre-scoping unscoped key name for one release, so a credential
+    stored before this existed keeps resolving.
+    """
 
     def __init__(self, driftpin_dir: Path) -> None:
         self._driftpin_dir = driftpin_dir
+
+    def _project_id(self) -> str:
+        return hashlib.sha256(str(self._driftpin_dir.resolve()).encode("utf-8")).hexdigest()[:16]
+
+    def _scoped_key(self, key: str) -> str:
+        return f"{self._project_id()}:{key}"
 
     def get(self, key: str, env_var: str | None = None) -> str | None:
         if env_var and (value := os.environ.get(env_var)):
             return value
 
         try:
-            value = keyring.get_password(_SERVICE_NAME, key)
+            value = keyring.get_password(_SERVICE_NAME, self._scoped_key(key))
             if value is not None:
                 return value
+            legacy_value = keyring.get_password(_SERVICE_NAME, key)
+            if legacy_value is not None:
+                return legacy_value
         except KeyringError:
             pass
 
@@ -42,7 +61,7 @@ class SecretStore:
 
     def set(self, key: str, value: str) -> None:
         try:
-            keyring.set_password(_SERVICE_NAME, key, value)
+            keyring.set_password(_SERVICE_NAME, self._scoped_key(key), value)
             return
         except KeyringError:
             pass

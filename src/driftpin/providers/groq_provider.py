@@ -8,7 +8,9 @@ asking for bare JSON in prose.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -28,6 +30,30 @@ _DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _DEFAULT_MAX_TOKENS = 4096
 _STRUCTURED_TOOL_NAME = "emit_structured_output"
+_MAX_RATE_LIMIT_RETRIES = 3
+_DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 10.0
+_RETRY_AFTER_PATTERN = re.compile(r"try again in ([\d.]+)s")
+
+
+def _parse_retry_after_seconds(message: str) -> float:
+    match = _RETRY_AFTER_PATTERN.search(message)
+    if match:
+        return float(match.group(1))
+    return _DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
+
+
+def _raise_for_status_with_body(response: httpx.Response) -> None:
+    """`raise_for_status()` alone drops Groq's actual error message (status
+    code and generic reason phrase only) — the detail that actually explains
+    *why* a request failed lives in the JSON body. Re-raise with it attached."""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise httpx.HTTPStatusError(
+            f"{exc}\nResponse body: {response.text}",
+            request=exc.request,
+            response=exc.response,
+        ) from exc
 
 
 class GroqProvider(LLMProvider):
@@ -51,7 +77,7 @@ class GroqProvider(LLMProvider):
                     "max_tokens": 1,
                 },
             )
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
         except httpx.HTTPError as exc:
             raise ProviderValidationError(f"Groq validation failed: {exc}") from exc
 
@@ -72,6 +98,20 @@ class GroqProvider(LLMProvider):
             }
             for t in tools
         ]
+
+    async def _post_with_rate_limit_retry(self, payload: dict[str, Any]) -> httpx.Response:
+        """POSTs to /chat/completions, backing off and retrying on 429 up to
+        `_MAX_RATE_LIMIT_RETRIES` times. Any other status is returned as-is
+        for the caller to interpret (different endpoints treat 400 differently)."""
+        attempt = 0
+        while True:
+            response = await self._client.post("/chat/completions", json=payload)
+            if response.status_code != 429 or attempt >= _MAX_RATE_LIMIT_RETRIES:
+                return response
+
+            message = response.json().get("error", {}).get("message", "")
+            await asyncio.sleep(_parse_retry_after_seconds(message))
+            attempt += 1
 
     def _parse_response(self, data: dict[str, Any]) -> CompletionResult:
         choice = data["choices"][0]
@@ -108,8 +148,8 @@ class GroqProvider(LLMProvider):
         if tools:
             payload["tools"] = self._to_groq_tools(tools)
 
-        response = await self._client.post("/chat/completions", json=payload)
-        response.raise_for_status()
+        response = await self._post_with_rate_limit_retry(payload)
+        _raise_for_status_with_body(response)
         return self._parse_response(response.json())
 
     async def stream(
@@ -189,8 +229,25 @@ class GroqProvider(LLMProvider):
             "tools": self._to_groq_tools([forced_tool]),
             "tool_choice": {"type": "function", "function": {"name": _STRUCTURED_TOOL_NAME}},
         }
-        response = await self._client.post("/chat/completions", json=payload)
-        response.raise_for_status()
+        response = await self._post_with_rate_limit_retry(payload)
+
+        if response.status_code == 400:
+            error = response.json().get("error", {})
+            if error.get("code") == "tool_use_failed":
+                # The model produced a call Groq's backend couldn't parse into
+                # valid arguments. Surface the raw attempt as `content` rather
+                # than raising — providers.structured's retry loop treats
+                # unparseable content exactly like a schema-validation
+                # failure and re-prompts with the concrete error, which is
+                # the same recovery path a malformed-but-200 response gets.
+                return CompletionResult(
+                    content=error.get("failed_generation", ""),
+                    tokens_in=0,
+                    tokens_out=0,
+                    stop_reason="tool_use_failed",
+                )
+
+        _raise_for_status_with_body(response)
         result = self._parse_response(response.json())
         if not result.tool_calls:
             return result

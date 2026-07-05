@@ -9,6 +9,8 @@ Check for:
 
 Severity guide: `blocker` for hallucinated references, `major` for coverage gaps on critical or high risk requirements, `minor` for coverage gaps on medium or low risk requirements or inconsistent owning_agent, `info` for anything else worth noting.
 
+If a finding cites a requirement ID, copy it character-for-character from the lists below (they look like `R-` followed by 8 hexadecimal characters, e.g. `R-5016e37f` — not sequential numbers like `R-01`). Never renumber or invent one.
+
 `review_id` must be exactly `{{ review_id }}` and `target_run_id` must be exactly `{{ target_run_id }}`. Set `passed` to false if there is at least one blocker or major finding; otherwise true.
 
 Requirements:
