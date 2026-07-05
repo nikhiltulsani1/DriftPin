@@ -9,8 +9,8 @@ from driftpin.schemas.strategy import ExecutionRecommendation, OwningAgent
 
 class TestStep(BaseModel):
     step_number: int = Field(ge=1)
-    action: str
-    expected_result: str
+    action: str = Field(min_length=1)
+    expected_result: str = Field(min_length=1)
 
 
 class TestCase(BaseModel):
@@ -19,7 +19,7 @@ class TestCase(BaseModel):
     case_id: str
     scenario_id: str
     requirement_ids: list[str] = Field(min_length=1)
-    title: str
+    title: str = Field(min_length=1)
     preconditions: str = Field(default="")
     steps: list[TestStep] = Field(min_length=1)
     owning_agent: OwningAgent

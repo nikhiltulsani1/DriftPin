@@ -29,6 +29,12 @@ def test_requirement_round_trips_through_json() -> None:
     assert restored == requirement
 
 
+@pytest.mark.parametrize("field", ["title", "description", "source_span"])
+def test_requirement_rejects_empty_string_fields(field: str) -> None:
+    with pytest.raises(ValidationError):
+        _requirement(**{field: ""})
+
+
 def test_scenario_requires_at_least_one_requirement_id() -> None:
     with pytest.raises(ValidationError):
         Scenario(
@@ -39,6 +45,32 @@ def test_scenario_requires_at_least_one_requirement_id() -> None:
             risk_tier=RiskTier.HIGH,
             execution_recommendation=ExecutionRecommendation.AUTOMATE,
             recommendation_justification="Deterministic assertions, low setup cost.",
+        )
+
+
+def test_scenario_rejects_empty_title() -> None:
+    with pytest.raises(ValidationError):
+        Scenario(
+            scenario_id="S-1",
+            title="",
+            requirement_ids=["R-abc12345"],
+            owning_agent=OwningAgent.FUNCTIONAL_TESTER,
+            risk_tier=RiskTier.HIGH,
+            execution_recommendation=ExecutionRecommendation.AUTOMATE,
+            recommendation_justification="Deterministic assertions, low setup cost.",
+        )
+
+
+def test_scenario_rejects_empty_justification() -> None:
+    with pytest.raises(ValidationError):
+        Scenario(
+            scenario_id="S-1",
+            title="Login flow",
+            requirement_ids=["R-abc12345"],
+            owning_agent=OwningAgent.FUNCTIONAL_TESTER,
+            risk_tier=RiskTier.HIGH,
+            execution_recommendation=ExecutionRecommendation.AUTOMATE,
+            recommendation_justification="",
         )
 
 
@@ -66,6 +98,27 @@ def test_test_case_requires_at_least_one_step() -> None:
             owning_agent=OwningAgent.FUNCTIONAL_TESTER,
             execution_recommendation=ExecutionRecommendation.MANUAL,
         )
+
+
+def test_test_case_rejects_empty_title() -> None:
+    with pytest.raises(ValidationError):
+        CaseModel(
+            case_id="TC-1",
+            scenario_id="S-1",
+            requirement_ids=["R-abc12345"],
+            title="",
+            steps=[StepModel(step_number=1, action="Click reset link", expected_result="Email sent")],
+            owning_agent=OwningAgent.FUNCTIONAL_TESTER,
+            execution_recommendation=ExecutionRecommendation.MANUAL,
+        )
+
+
+@pytest.mark.parametrize("field", ["action", "expected_result"])
+def test_test_step_rejects_empty_fields(field: str) -> None:
+    defaults: dict[str, object] = dict(step_number=1, action="Click reset link", expected_result="Email sent")
+    defaults[field] = ""
+    with pytest.raises(ValidationError):
+        StepModel(**defaults)  # type: ignore[arg-type]
 
 
 def test_test_case_accepts_valid_payload() -> None:

@@ -28,16 +28,17 @@ class Scenario(BaseModel):
     """A single test scenario within a strategy, scoped to one or more requirements."""
 
     scenario_id: str
-    title: str
+    title: str = Field(min_length=1)
     requirement_ids: list[str] = Field(min_length=1)
     owning_agent: OwningAgent
     risk_tier: RiskTier
     execution_recommendation: ExecutionRecommendation
     recommendation_justification: str = Field(
+        min_length=1,
         description=(
             "One line citing the rubric basis: assertion determinism, flakiness risk, "
             "or setup cost vs. run frequency."
-        )
+        ),
     )
 
 

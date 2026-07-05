@@ -14,7 +14,7 @@ Most "AI writes tests" tools optimize for volume: generate a pile of Playwright 
 
 ## Status
 
-Release 1 is code-complete: ingestion, requirement registry, agent pipeline, renderers, CLI, REPL, and Docker packaging all work end to end. The actual gate — scoring generated output against a human-authored golden PRD — hasn't run yet; that needs live provider credentials. See [EVALS.md](EVALS.md) for what's scored and what's still pending, and [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) for the reasoning behind the architecture below.
+Release 1 is code-complete and has run for real: ingestion, generation, and rendering have all executed end-to-end against a human-authored PRD on Anthropic-compatible (Groq) and local (Ollama) providers, with ledger evidence for every run. What's still open is the actual gate itself — a human scoring the generated test cases against hand-written expected coverage (precision/recall), which is deliberately reserved for a human, not something this tool scores on its own behalf. An independent fresh-context audit also flagged a real schema gap (several output fields could pass validation while empty or templated) that's since been fixed with `min_length` constraints. See [EVALS.md](EVALS.md) for what's scored and what's still pending, and [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) for the reasoning behind the architecture below.
 
 ## Architecture
 

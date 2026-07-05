@@ -24,10 +24,11 @@ class Requirement(BaseModel):
     """
 
     requirement_id: str
-    title: str
-    description: str
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
     source_span: str = Field(
-        description="Verbatim quote from the source document supporting this requirement."
+        min_length=1,
+        description="Verbatim quote from the source document supporting this requirement.",
     )
     source_doc_path: str
     source_doc_hash: str
@@ -43,10 +44,11 @@ class CandidateRequirement(BaseModel):
     """Raw LLM extraction output, before the registry assigns an ID and stamps
     the source document's path and hash — the extracting LLM knows neither."""
 
-    title: str
-    description: str
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
     source_span: str = Field(
-        description="Verbatim quote from the source document supporting this requirement."
+        min_length=1,
+        description="Verbatim quote from the source document supporting this requirement.",
     )
     risk_tier: RiskTier
 
@@ -58,8 +60,8 @@ class CandidateAmbiguity(BaseModel):
     requirement coverage.
     """
 
-    description: str
-    source_span: str
+    description: str = Field(min_length=1)
+    source_span: str = Field(min_length=1)
 
 
 class ExtractionResult(BaseModel):

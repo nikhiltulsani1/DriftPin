@@ -16,8 +16,10 @@ class FindingSeverity(StrEnum):
 
 class ReviewerFinding(BaseModel):
     severity: FindingSeverity
-    subject_id: str = Field(description="ID of the scenario, case, or artifact under review.")
-    description: str
+    subject_id: str = Field(
+        min_length=1, description="ID of the scenario, case, or artifact under review."
+    )
+    description: str = Field(min_length=1)
     requirement_ids: list[str] = Field(default_factory=list)
 
 
@@ -26,4 +28,4 @@ class ReviewReport(BaseModel):
     target_run_id: str
     findings: list[ReviewerFinding] = Field(default_factory=list)
     passed: bool
-    summary: str
+    summary: str = Field(min_length=1)

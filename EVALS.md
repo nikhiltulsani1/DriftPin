@@ -55,12 +55,63 @@ Neither classifier is live yet; both ship with Release 2.
 
 | Release | Status | Notes |
 |---|---|---|
-| Release 1 | Not yet run | Code-complete: ingestion, requirement registry, ChromaDB chunk store, test-architect/functional-tester/reviewer agents, orchestrator, Excel/Markdown renderers, CLI + REPL, Docker packaging. Blocked on live provider credentials for the actual gate run against the golden PRD(s) in `evals/golden/`. |
+| Release 1 | Runs happened; human scoring not yet done | Code-complete and executed for real: ingestion, generation, and rendering all ran end-to-end against `evals/golden/prd-1-voice-assistant-fab.md` on Groq (`llama-3.1-8b-instant`, `llama-3.3-70b-versatile`) and local Ollama (`llama3.2:3b`), with ledger evidence for every run. A separate adversarial PRD (`samples/adversarial-account-lifecycle-prd.md`) was run to verify ambiguity-flagging behavior — see below. What's outstanding is the human precision/recall scoring itself, which this tool deliberately does not perform on its own behalf. |
 | Release 2 | Not started | — |
 | Release 3 | Not started | — |
 | Release 4 | Not started | — |
 
+## Adversarial-input check
+
+A synthetic PRD with a direct requirement contradiction (permanent deletion
+within 24 hours vs. 7-year mandatory retention of the same data), two
+dangling references to documents that don't exist in the text, and an
+internally self-contradictory requirement (instant password reset vs. a
+multi-day manual review before "complete") was run through ingestion three
+times total (Groq `llama-3.3-70b-versatile`), across two extraction-prompt
+versions.
+
+**First prompt version:** all 6 stated requirements extracted verbatim with
+no fabricated or invented "resolution," but the ambiguities caught were only
+the ones the source document itself admitted to ("this draft has not yet
+been reconciled...") — not independently-reasoned findings like "R-01 and
+R-02 directly contradict each other." The extractor noticed textual
+admissions of uncertainty far more reliably than it independently detected
+logical conflicts between two separately-true-sounding requirements.
+
+**Hardened prompt version** (`prompts/extraction.md.j2`, explicit
+instruction to cross-check every requirement against every other one for
+direct contradictions, dangling external references, and internal
+self-contradiction, as a deliberate second pass rather than a passive aside):
+caught all four of the deliberately engineered issues in a single run —
+the R-01/R-02 contradiction (citing both source spans), both dangling
+references (Appendix C, the undefined account-merge policy), and R-04's
+internal self-contradiction. Zero missed. Requirement extraction remained
+accurate (still 6/6, still verbatim, still no fabrication).
+
+**New honest caveat found while re-verifying:** re-running ingestion against
+the identical document across these two prompt versions produced a
+requirement with two different content-addressed IDs, because the model's
+choice of exact sentence boundary for the same requirement shifted slightly
+between the two calls (one included a leading clause, "When a user requests
+account deletion,"; the other didn't) — different verbatim substrings hash
+to different IDs. `DESIGN_DECISIONS.md`'s claim that re-ingesting an
+unchanged PRD produces identical IDs holds for *extraction order*, which is
+what it was written to address, but not necessarily for *exact
+phrasing/boundary drift* across separate model calls on the same
+requirement — that's a real, narrower gap than the original claim might
+imply, worth fixing with either near-duplicate detection or boundary
+normalization in a future pass, not something to gloss over.
+
 ## Regressions
 
-None tracked yet — nothing has been scored. This section starts getting
-entries the first time a change makes a previously-passing eval fail.
+**Schema validation gap (found and fixed 2026-07-05):** an independent
+fresh-context review found that `Scenario.title`, `TestCase.title`,
+`TestStep.action`/`expected_result`, `ReviewReport.summary`, and
+`ReviewerFinding.subject_id`/`description` had no `min_length` constraint,
+unlike `requirement_ids` which already required at least one entry. A weak
+model could satisfy the schema with an empty string and it would pass
+validation silently — this is exactly how an earlier local-model run
+produced blank scenario titles and a literal placeholder review summary
+("Review summary") without tripping any validation error. Fixed by adding
+`min_length=1` across all of the above, with new tests asserting each field
+rejects an empty string.
