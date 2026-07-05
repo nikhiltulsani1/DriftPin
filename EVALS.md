@@ -55,7 +55,7 @@ Neither classifier is live yet; both ship with Release 2.
 
 | Release | Status | Notes |
 |---|---|---|
-| Release 1 | Runs happened; human scoring not yet done | Code-complete and executed for real: ingestion, generation, and rendering all ran end-to-end against `evals/golden/prd-1-voice-assistant-fab.md` on Groq (`llama-3.1-8b-instant`, `llama-3.3-70b-versatile`) and local Ollama (`llama3.2:3b`), with ledger evidence for every run. A separate adversarial PRD (`samples/adversarial-account-lifecycle-prd.md`) was run to verify ambiguity-flagging behavior — see below. What's outstanding is the human precision/recall scoring itself, which this tool deliberately does not perform on its own behalf. |
+| Release 1 | Runs happened; human scoring not yet done | Code-complete and executed for real: ingestion, generation, and rendering all ran end-to-end against `evals/golden/prd-1-voice-assistant-fab.md` on Groq (`llama-3.1-8b-instant`, `llama-3.3-70b-versatile`) and local Ollama (`llama3.2:3b`), with ledger evidence for every run. A separate adversarial PRD (`samples/adversarial-account-lifecycle-prd.md`) was run to verify ambiguity-flagging behavior — see below. Latest run (`b8d6c4980eff` → cleaned up to `3a1c93821313`, ledger evidence in `.driftpin/runs/`) is the one to score: 12/12 requirements covered, review passed with a real summary, no schema violations. What's outstanding is the human precision/recall scoring itself, which this tool deliberately does not perform on its own behalf. |
 | Release 2 | Not started | — |
 | Release 3 | Not started | — |
 | Release 4 | Not started | — |
@@ -159,3 +159,20 @@ produced blank scenario titles and a literal placeholder review summary
 ("Review summary") without tripping any validation error. Fixed by adding
 `min_length=1` across all of the above, with new tests asserting each field
 rejects an empty string.
+
+**Silent under-extraction, undetected for the whole session (found 2026-07-05):**
+every run against the golden PRD up to this point reported "11 requirements,
+0 ambiguities" and was treated as a clean, complete extraction. The PRD
+actually contains 12 (R-01 through R-12) — one was being silently dropped
+every single time, across multiple different models (Groq 8B, Groq 70B,
+Ollama 3B), with no ambiguity ever flagged for the gap. This went unnoticed
+because "0 ambiguities" reads as a success signal, and nobody had
+cross-checked the extracted count against a manual count of the source
+document until a registry reset forced a fresh look. A later run (after the
+same reset) correctly extracted all 12. This is not attributed to a specific
+prompt change — it's plausibly just run-to-run model variance on a
+borderline-short requirement (R-05, "FAB is hidden on the Schedule screen,"
+one line, easy to fold into an adjacent requirement) — but the real lesson
+is methodological: requirement *recall* needs an explicit check against the
+source document's actual requirement count, not just an absence of flagged
+ambiguities, which only catches problems the extractor itself notices.
