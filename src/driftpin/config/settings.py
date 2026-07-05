@@ -16,6 +16,7 @@ class ProviderKind(StrEnum):
     ANTHROPIC = "anthropic"
     OLLAMA = "ollama"
     OPENAI = "openai"
+    GROQ = "groq"
 
 
 class ProviderConfig(BaseModel):

@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from driftpin.cli.init_wizard import ANTHROPIC_API_KEY_ENV_VAR, ANTHROPIC_API_KEY_SECRET
+from driftpin.cli.init_wizard import (
+    ANTHROPIC_API_KEY_ENV_VAR,
+    ANTHROPIC_API_KEY_SECRET,
+    GROQ_API_KEY_ENV_VAR,
+    GROQ_API_KEY_SECRET,
+)
 from driftpin.config.secrets import SecretStore
 from driftpin.config.settings import ProviderKind, driftpin_dir, load_config
 from driftpin.providers.anthropic_provider import AnthropicProvider
 from driftpin.providers.base import LLMProvider
+from driftpin.providers.groq_provider import GroqProvider
 from driftpin.providers.ollama_provider import OllamaProvider
 
 
@@ -32,6 +38,16 @@ def build_configured_provider(project_root: Path) -> LLMProvider:
                 f"{ANTHROPIC_API_KEY_ENV_VAR}."
             )
         return AnthropicProvider(api_key=api_key, model=config.provider.model)
+
+    if config.provider.kind == ProviderKind.GROQ:
+        secrets = SecretStore(driftpin_dir(project_root))
+        api_key = secrets.get(GROQ_API_KEY_SECRET, env_var=GROQ_API_KEY_ENV_VAR)
+        if not api_key:
+            raise ProviderNotConfiguredError(
+                "No Groq API key found. Run `driftpin init` again or set "
+                f"{GROQ_API_KEY_ENV_VAR}."
+            )
+        return GroqProvider(api_key=api_key, model=config.provider.model)
 
     if config.provider.kind == ProviderKind.OLLAMA:
         base_url = config.provider.base_url

@@ -27,12 +27,16 @@ from driftpin.config.settings import (
 from driftpin.providers.anthropic_provider import AnthropicProvider
 from driftpin.providers.base import ProviderValidationError
 from driftpin.providers.conformance import ConformanceResult, run_conformance_probe
+from driftpin.providers.groq_provider import GroqProvider
 from driftpin.providers.ollama_provider import OllamaProvider
 
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 ANTHROPIC_API_KEY_SECRET = "anthropic_api_key"
 ANTHROPIC_API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+GROQ_API_KEY_SECRET = "groq_api_key"
+GROQ_API_KEY_ENV_VAR = "GROQ_API_KEY"
 
 
 class InitWizardError(Exception):
@@ -68,6 +72,12 @@ async def validate_anthropic_key(api_key: str, model: str) -> None:
     await provider.validate()
 
 
+async def validate_groq_key(api_key: str, model: str) -> None:
+    """Raises ProviderValidationError if the key or model is rejected."""
+    provider = GroqProvider(api_key=api_key, model=model)
+    await provider.validate()
+
+
 async def probe_local_model_conformance(base_url: str, model: str) -> ConformanceResult:
     provider = OllamaProvider(base_url=base_url, model=model)
     return await run_conformance_probe(provider)
@@ -92,12 +102,14 @@ def run_init_wizard(project_root: Path, console: Console | None = None) -> None:
 
     provider_choice = Prompt.ask(
         "Which provider will drive Driftpin's agents?",
-        choices=["anthropic", "local"],
+        choices=["anthropic", "groq", "local"],
         default="anthropic",
     )
 
     if provider_choice == "anthropic":
         _run_anthropic_setup(project_root, console)
+    elif provider_choice == "groq":
+        _run_groq_setup(project_root, console)
     else:
         _run_ollama_setup(project_root, console)
 
@@ -122,6 +134,28 @@ def _run_anthropic_setup(project_root: Path, console: Console) -> None:
     config = build_config(ProviderKind.ANTHROPIC, model=model)
     save_config(project_root, config)
     console.print(f"[green]Configured Anthropic provider with model '{model}'.[/green]")
+
+
+def _run_groq_setup(project_root: Path, console: Console) -> None:
+    api_key = os.environ.get(GROQ_API_KEY_ENV_VAR)
+    if not api_key:
+        api_key = Prompt.ask("Groq API key", password=True)
+
+    model = Prompt.ask("Model", default=DEFAULT_GROQ_MODEL)
+
+    console.print("Validating Groq credentials...")
+    try:
+        asyncio.run(validate_groq_key(api_key, model))
+    except ProviderValidationError as exc:
+        console.print(f"[red]Validation failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+    secrets = SecretStore(driftpin_dir(project_root))
+    secrets.set(GROQ_API_KEY_SECRET, api_key)
+
+    config = build_config(ProviderKind.GROQ, model=model)
+    save_config(project_root, config)
+    console.print(f"[green]Configured Groq provider with model '{model}'.[/green]")
 
 
 def _run_ollama_setup(project_root: Path, console: Console) -> None:
