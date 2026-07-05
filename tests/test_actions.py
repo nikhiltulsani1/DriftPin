@@ -9,6 +9,7 @@ from driftpin.cli.actions import (
     DocumentNotFoundError,
     EmptyRegistryError,
     artifact_filename,
+    derive_source_slug,
     open_registry,
     run_generate_cases,
     run_generate_strategy,
@@ -28,37 +29,87 @@ def _write_registry(project_root: Path, requirements: list[Requirement]) -> None
     )
 
 
-def _requirement(req_id: str = "R-1") -> Requirement:
+def _requirement(req_id: str = "R-1", source_doc_path: str = "prd.md") -> Requirement:
     return Requirement(
         requirement_id=req_id,
         title="A requirement",
         description="Description.",
         source_span="Some verbatim span.",
-        source_doc_path="prd.md",
+        source_doc_path=source_doc_path,
         source_doc_hash="hash-a",
         risk_tier=RiskTier.HIGH,
     )
 
 
-def test_artifact_filename_includes_prefix_timestamp_and_run_id() -> None:
-    filename = artifact_filename("cases", "abc123def456", "xlsx")
+def test_artifact_filename_capitalizes_prefix_and_includes_timestamp() -> None:
+    filename = artifact_filename("cases", "xlsx")
 
-    assert filename.startswith("cases_")
-    assert filename.endswith("_abc123def456.xlsx")
-    # "cases_20260705-113906_abc123def456.xlsx" -> timestamp segment is 15 chars (YYYYMMDD-HHMMSS)
-    timestamp_segment = filename.removeprefix("cases_").removesuffix("_abc123def456.xlsx")
+    assert filename.startswith("Cases_")
+    assert filename.endswith(".xlsx")
+    # "Cases_20260705-113906.xlsx" -> timestamp segment is 15 chars (YYYYMMDD-HHMMSS)
+    timestamp_segment = filename.removeprefix("Cases_").removesuffix(".xlsx")
     assert len(timestamp_segment) == 15
     assert timestamp_segment[8] == "-"
 
 
 def test_artifact_filename_differs_by_prefix_and_extension() -> None:
-    excel_name = artifact_filename("cases", "run1", "xlsx")
-    markdown_name = artifact_filename("cases", "run1", "md")
-    strategy_name = artifact_filename("strategy", "run1", "json")
+    excel_name = artifact_filename("cases", "xlsx")
+    markdown_name = artifact_filename("cases", "md")
+    strategy_name = artifact_filename("strategy", "json")
 
     assert excel_name != markdown_name
-    assert excel_name.startswith("cases_")
-    assert strategy_name.startswith("strategy_")
+    assert excel_name.startswith("Cases_")
+    assert strategy_name.startswith("Strategy_")
+
+
+def test_artifact_filename_includes_source_slug_when_given() -> None:
+    filename = artifact_filename("cases", "xlsx", source_slug="prd-1-voice-assistant")
+
+    assert filename.startswith("Cases_prd-1-voice-assistant_")
+    assert filename.endswith(".xlsx")
+
+
+def test_derive_source_slug_returns_none_for_no_requirements() -> None:
+    assert derive_source_slug([]) is None
+
+
+def test_derive_source_slug_uses_single_source_doc_stem() -> None:
+    requirements = [
+        _requirement("R-1", source_doc_path="evals/golden/prd-1-voice-assistant-fab.md"),
+        _requirement("R-2", source_doc_path="evals/golden/prd-1-voice-assistant-fab.md"),
+    ]
+
+    assert derive_source_slug(requirements) == "prd-1-voice-assistant-fab"
+
+
+def test_derive_source_slug_joins_up_to_two_distinct_sources() -> None:
+    requirements = [
+        _requirement("R-1", source_doc_path="prd-a.md"),
+        _requirement("R-2", source_doc_path="prd-b.md"),
+    ]
+
+    assert derive_source_slug(requirements) == "prd-a-prd-b"
+
+
+def test_derive_source_slug_falls_back_for_more_than_two_sources() -> None:
+    requirements = [
+        _requirement("R-1", source_doc_path="prd-a.md"),
+        _requirement("R-2", source_doc_path="prd-b.md"),
+        _requirement("R-3", source_doc_path="prd-c.md"),
+    ]
+
+    assert derive_source_slug(requirements) == "multi-source"
+
+
+def test_derive_source_slug_sanitizes_unsafe_filename_characters() -> None:
+    requirements = [_requirement("R-1", source_doc_path="My PRD (v2)!.md")]
+
+    slug = derive_source_slug(requirements)
+
+    assert slug is not None
+    assert " " not in slug
+    assert "(" not in slug
+    assert "!" not in slug
 
 
 @pytest.mark.asyncio

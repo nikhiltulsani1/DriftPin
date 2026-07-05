@@ -9,6 +9,7 @@ This module is presentation-agnostic: it returns data, never prints. Callers
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -29,7 +30,11 @@ from driftpin.providers.base import LLMProvider
 from driftpin.render.excel import save_excel_workbook
 from driftpin.render.headers import build_header
 from driftpin.render.markdown import render_markdown_report
+from driftpin.schemas.requirements import Requirement
 from driftpin.schemas.strategy import TestStrategy
+
+_SLUG_SANITIZE_PATTERN = re.compile(r"[^a-z0-9]+")
+_MAX_SOURCE_NAMES_IN_SLUG = 2
 
 
 class DocumentNotFoundError(Exception):
@@ -46,14 +51,44 @@ def new_run_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def artifact_filename(prefix: str, run_id: str, extension: str) -> str:
-    """A run ID alone (`3a1c93821313.xlsx`) isn't self-describing in a
-    directory listing — it doesn't say what kind of artifact it is or when it
-    ran. Every generated file is named `<prefix>_<timestamp>_<run_id>.<ext>`
-    instead: sortable chronologically, identifiable at a glance, and the run
-    ID is still there verbatim for cross-referencing against the ledger."""
+def _sanitize_slug(text: str) -> str:
+    slug = _SLUG_SANITIZE_PATTERN.sub("-", text.lower()).strip("-")
+    return slug or "doc"
+
+
+def derive_source_slug(requirements: list[Requirement]) -> str | None:
+    """Best-effort short label for the source document(s) behind a set of
+    requirements, for use in generated-artifact filenames. Returns None for
+    an empty requirement list; falls back to "multi-source" when the
+    requirements span more documents than reasonably fit in a filename."""
+    distinct_stems: list[str] = []
+    seen: set[str] = set()
+    for requirement in requirements:
+        stem = Path(requirement.source_doc_path).stem
+        if stem not in seen:
+            seen.add(stem)
+            distinct_stems.append(stem)
+
+    if not distinct_stems:
+        return None
+    if len(distinct_stems) > _MAX_SOURCE_NAMES_IN_SLUG:
+        return "multi-source"
+    return "-".join(_sanitize_slug(stem) for stem in distinct_stems)
+
+
+def artifact_filename(prefix: str, extension: str, source_slug: str | None = None) -> str:
+    """Every generated file is named `<Prefix>_<source-slug>_<timestamp>.<ext>`
+    (e.g. `Strategy_prd-1-voice-assistant-fab_20260705-121805.json`) — the
+    artifact type and the PRD it came from are both readable at a glance, and
+    files sort chronologically. The run ID isn't in the filename; it's still
+    recoverable from the artifact's own embedded content (the header on
+    Excel/Markdown reports, the `strategy_id`/`suite_id` fields in a strategy
+    or cases file) for cross-referencing against the ledger."""
     timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{prefix}_{timestamp}_{run_id}.{extension}"
+    title_prefix = prefix.capitalize()
+    if source_slug:
+        return f"{title_prefix}_{source_slug}_{timestamp}.{extension}"
+    return f"{title_prefix}_{timestamp}.{extension}"
 
 
 def open_registry(project_root: Path) -> RequirementRegistry:
@@ -175,9 +210,10 @@ async def run_generate_cases(
         requirements=registry.requirements,
         registry_version=registry.registry_version,
     )
+    source_slug = derive_source_slug(registry.requirements)
     out_dir.mkdir(parents=True, exist_ok=True)
-    excel_path = out_dir / artifact_filename("cases", run_id, "xlsx")
-    markdown_path = out_dir / artifact_filename("cases", run_id, "md")
+    excel_path = out_dir / artifact_filename("cases", "xlsx", source_slug=source_slug)
+    markdown_path = out_dir / artifact_filename("cases", "md", source_slug=source_slug)
     save_excel_workbook(pipeline_result, header, excel_path)
     markdown_path.write_text(render_markdown_report(pipeline_result, header), encoding="utf-8")
 
