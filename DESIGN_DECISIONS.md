@@ -676,6 +676,78 @@ topic), explicitly out of this round's scope to change mid-verification.
 Full scoring table in `EVALS.md`'s "Registry-level spec consistency
 pass" section.
 
+## R2 consistency-pass revisions: judged NFR crediting, lifecycle pairs, and quarantined disagreement
+
+Three revisions to the consistency pass, each traceable to a specific
+live-diagnosed miss (full scoring in `EVALS.md`'s "R2 coverage-gap round"
+section):
+
+**req_vs_silence crediting is now judged, not keyword-matched.** The
+original rule — any applicable NFR containing a failure keyword credits
+the requirement with "failure handling specified" — was measured live
+crediting all nine PocketBudget requirements from one global sync-retry
+NFR, including a summary-generation requirement with nothing to do with
+syncing. The boundary now runs on curation, not keywords: a requirement's
+OWN text or an explicitly SCOPED NFR link (a human-curated, per-requirement
+association) still resolves a candidate deterministically for free, but a
+GLOBAL NFR — applicable to everything by default, and therefore about
+nothing in particular — must pass a per-(requirement, NFR)
+`nfr-applicability` judgment call ("does this NFR actually govern this
+requirement's failure modes?") before it counts. The unit test that had
+enshrined keyword crediting as correct was inverted, and a regression
+test reproduces the exact two-requirement PocketBudget scenario. Live:
+the applicability call correctly credited sync and refused
+summary-generation, which then surfaced the planted missing-failure-path
+gap verbatim (Damage 8, Miss → Full).
+
+**req_vs_lifecycle: the pair type for state-transition silence — high
+recall, known-bad precision.** Three of the remaining misses were
+lifecycle questions (deleted-budget state, override conflicts, export
+boundary) that no text-vs-text pair can ask. A one-time
+`lifecycle-entities` extraction call identifies which requirements
+reference which stateful domain entities (IDs filtered against the real
+registry, like every extraction output); Python then enumerates one pair
+per (requirement, entity, fixed state) — created, modified, deleted,
+conflicting, expired_out_of_range — each judged alone, no second text,
+reusing the existing verdict schema and agent. Live, this caught Damage 3
+and Damage 9's planted gaps VERBATIM and gave Damage 5 and 6 partial
+coverage — but it did so by flagging nearly every (entity, state)
+combination it enumerated: 48 of 55 golden-PRD lifecycle pairs came back
+`silence_gap` on a spec with zero planted defects ("does not specify what
+happens when a meal_log reaches the 'created' state," on the requirement
+whose whole text is the creation spec). The check's question — "does this
+text address state S?" — fails a pedantic reading of almost any real spec
+text for almost any state. Recorded as an open precision item: the state
+list needs gating on reachability (only ask about states some requirement
+actually implies) before this pair type's findings are trustworthy at
+face value rather than as a haystack containing a couple of real needles.
+
+**Disagreement is quarantined, never majority-voted.** Optional
+self-consistency mode (`--self-consistency-n N`, default off) reruns each
+pair's verdict N independent times. Unanimity uses the verdict as before;
+ANY disagreement becomes `flagged_for_review` — a verdict the model is
+never asked for and cannot return itself — because a silent 2-1 majority
+would hide exactly the instability the mode exists to measure. Live
+validation of the design's premise: the golden PRD's
+never-drop-vs-empty-speech tension — the same ambiguity that flip-flopped
+a live verdict between blocker and pass two rounds ago (TC-26) — came
+back 1-contradiction/2-consistent and was correctly quarantined instead
+of coin-flipped. The costs are honest too: the budget guard's estimate
+scales by N, and two previously-clean full catches (Damage 1's timezone
+mismatch among them) got demoted from asserted findings to
+`flagged_for_review` because one of three runs dissented — severity paid
+for stability.
+
+**The compliance-hardening rule failed its target, recorded per its own
+stop rule.** The checker prompt now demands exact-mechanism alignment
+(not thematic similarity) for GDPR/retention/consent-class terms — and
+the unlink-vs-GDPR req_vs_nfr pair STILL returned `consistent` in every
+run, including under self-consistency. Damage 6's partial credit comes
+from the lifecycle account/deleted pair instead. Per the work item's own
+instruction ("do NOT chase this beyond prompt + self-consistency"), this
+is documented as a known model-capability limit of
+`nemotron-3-ultra-550b-a55b` on this pair shape, not an open bug.
+
 ## Context-scoped synthesis: single-call is the default, and stays the default until proven otherwise
 
 The plan explicitly allows the test-architect to spawn scoped sub-calls across

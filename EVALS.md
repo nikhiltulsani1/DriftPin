@@ -822,6 +822,102 @@ own text shares vocabulary with the requirement's action, not any global
 NFR regardless of topic) but out of this round's scope to change
 mid-verification.
 
+## R2 coverage-gap round: silence-fix + lifecycle pairs + verdict hardening
+
+Three work items built in response to the 2-full/1-partial/6-miss GATE 2
+score above (all three committed separately; 252 tests, ruff clean):
+**(1)** the req_vs_silence global-NFR false-crediting fix — a global NFR's
+failure keywords no longer silently credit every requirement; an
+`nfr-applicability` call now asks, per (requirement, global NFR), whether
+the NFR actually governs that requirement's action (scoped NFR links and
+own-text failure wording still resolve for free); **(2)** a new
+req_vs_lifecycle pair type — a one-time `lifecycle-entities` extraction
+call links domain entities to requirements, then Python enumerates one
+pair per (requirement, entity, state) across five fixed states (created,
+modified, deleted, conflicting, expired_out_of_range), reusing the
+existing verdict schema; **(3)** verdict hardening — a compliance-terms
+rule in the checker prompt (exact-mechanism alignment for GDPR-class
+vocabulary, not thematic similarity) plus optional self-consistency mode
+(`--self-consistency-n N`, default off): N independent verdict calls per
+pair, unanimity required, disagreement becomes a new `flagged_for_review`
+verdict rather than a silent majority vote.
+
+**A scoring correction first, against my own earlier table.** Re-checking
+the baseline run's rendered report (not just ASSUMPTIONS.md, which is
+what the earlier scoring grepped) shows the reviewer's modal-strength
+check HAD already flagged Req-5's "should decline" (TC-57/TC-60) and
+Req-2's "should remember" (TC-16) in the baseline. Damage 4 and Damage 9
+were therefore already Partial at baseline, not Miss. Corrected baseline:
+**2 full, 3 partial, 4 miss** (not 2/1/6).
+
+**GATE 2 rerun (PocketBudget, NVIDIA, run `b20a4c367d69`,
+`--self-consistency-n 3`): 5 full, 4 partial, 0 miss.**
+164 pairs checked (11 req_vs_ac, 45 req_vs_nfr, 12 req_vs_peer, 6
+req_vs_silence — up from the bug's 0 — and 90 req_vs_lifecycle), 7
+applicability calls, 9/9 coverage retained.
+
+| # | Damage | Verdict (vs corrected baseline) | Changed by |
+|---|---|---|---|
+| 1 | Budget reset timezone | Full — exact tension stated verbatim in 2 of 3 checks; surfaced as `flagged_for_review` because the third said `consistent` (was Full/blocker) | WI3 demoted severity, honestly |
+| 2 | Alert dedup window | Full — unanimous, exact (unchanged) | — |
+| 3 | Deleted-budget state | **Miss → Full** — lifecycle budget/deleted: "does not specify what happens when a budget is deleted or removed" | WI2 |
+| 4 | AI scope modal + mechanism | Partial — modal half via reviewer (TC-48) as at corrected baseline; enforcement-mechanism half still unnamed | — |
+| 5 | Export range | **Miss → Partial** — lifecycle export/expired_out_of_range names the 12-month boundary gap; rolling-vs-calendar and new-user framings still unnamed | WI2 |
+| 6 | Unlink vs GDPR | **Miss → Partial** — lifecycle account/deleted: "describes unlinking an account but does not specify what happens when the account reaches a deleted state" — the planted unlink-vs-delete ambiguity, without naming GDPR. The req_vs_nfr (R-08, GDPR) pair STILL returned consistent despite the compliance-hardened prompt — recorded as a model-capability limit per the work item's own stop rule, not chased further | WI2 (partial); WI3 failed to flip the NFR verdict |
+| 7 | Multi-currency display | Partial — same real contradiction, unanimous, same alternate framing (unchanged) | — |
+| 8 | Summary generation failure | **Miss → Full** — req_vs_silence fired after the applicability call correctly refused sync-NFR credit: "generates a monthly spending summary but does not specify what happens if that generation action fails" | WI1 |
+| 9 | Override conflict + modal | **Partial → Full** — lifecycle override/conflicting: "does not specify how the system resolves conflicting overrides for the same merchant" (exact), plus the modal half via reviewer and a flagged modal_ambiguity on the AC | WI2 |
+
+Against the GATE target ("≥7/9 with at least partial coverage on all 9"):
+all 9 damages now have at least partial coverage; 5 of 9 are full. If the
+target reads "≥7 at least partially covered," it is met (9/9). If it
+reads "≥7 FULL," it is not (5/9). Both readings reported; neither the
+target nor the scoring was adjusted.
+
+**GATE 3 rerun (golden PRD, NVIDIA, run `d464f89bd0ca`): the precision
+regression is real and large — reported prominently, not buried.**
+110 pairs (55 of them lifecycle), 60 findings vs the pre-round baseline
+of 3. Classified against source text:
+- **Real, unchanged:** the two R-ecd42d32 body-vs-AC findings (TTS
+  every-vs-successful, TTS-vs-silent) still land unanimously; the
+  R-8bd5fc12 2.8s-vs-±0.3s finding still surfaces (now
+  `flagged_for_review`, 2 of 3 agreeing).
+- **Real, new, correctly quarantined:** R-795ecde3 flagged — 1 of 3
+  checks called the never-drop-rule-vs-"empty speech → no entry created"
+  tension a contradiction. This is the SAME ambiguity that produced the
+  live TC-26 blocker/pass verdict instability two rounds ago —
+  self-consistency surfacing it as "genuinely ambiguous, human decides"
+  instead of coin-flipping is exactly the designed behavior.
+- **False positives, en masse: 48 lifecycle silence_gaps** (plus several
+  lifecycle-flagged). Nearly EVERY (entity, state) lifecycle pair on this
+  clean, defect-free PRD was flagged — e.g. "does not specify what
+  happens when a meal_log reaches the 'created' state" on a requirement
+  whose entire text IS the creation spec, and workout_log/modified,
+  note/expired_out_of_range, etc. for every entity. The check as designed
+  asks "does this text address state S" and almost any real-world spec
+  text fails a pedantic reading of most states. The same shotgun fired on
+  PocketBudget: its 2 exact lifecycle catches (Damage 3, 9) came bundled
+  with ~80 sibling noise findings. Recall was bought with precision:
+  lifecycle-pair specificity on a clean spec is roughly 0 of 48+.
+
+**Verdict-hardening outcome (Work Item 3), stated per its own stop rule:**
+self-consistency worked as designed (10 golden / 6 PocketBudget unstable
+verdicts quarantined as `flagged_for_review` instead of silently asserted
+or majority-voted, including one real known-ambiguous case); the
+compliance-terms prompt rule did NOT flip the unlink-vs-GDPR req_vs_nfr
+verdict — it returned `consistent` in all runs — and this is now
+documented as a known model-capability limit, not chased further. Damage
+6's partial credit comes from the lifecycle pair type instead.
+
+**Net honest position:** recall target substantially reached (0 complete
+misses, up from 4), driven mostly by the lifecycle pair type — but that
+same pair type is currently an over-flagging instrument whose findings
+are assumption-severity noise ~95% of the time on a clean spec. Before
+the lifecycle check can be considered production-quality, it needs a
+precision pass (e.g. only flag states the entity's own text makes
+reachable, or require the state to be implied by some requirement before
+asking about it) — an explicitly open item, out of this round's scope.
+
 ## Adversarial-input check
 
 A synthetic PRD with a direct requirement contradiction (permanent deletion
