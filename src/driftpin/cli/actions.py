@@ -186,12 +186,16 @@ async def _run_consistency_stage(
     on_stage: OnStage | None,
     on_pair_count_check: Callable[[int], bool] | None,
     on_consistency_report: Callable[[ConsistencyReport], bool] | None,
+    self_consistency_n: int,
 ) -> ConsistencyReport:
     """Runs after ingestion (the registry already holds every requirement,
     AC, and NFR) and before test-architect ever sees the registry — the
     spec-internal-consistency question is answered once, up front, rather
     than folded into any later review stage that only ever compares a
-    generated test case against the spec."""
+    generated test case against the spec. `self_consistency_n` defaults to
+    1 (off) and is meant to be turned on explicitly for a GATE-style
+    verification run, not routine use — see `run_consistency_check`'s
+    docstring for what it actually does and costs."""
     if on_stage is not None:
         on_stage("consistency-checker")
     report = await run_consistency_check(
@@ -200,6 +204,7 @@ async def _run_consistency_stage(
         registry.nfrs,
         ledger=ledger,
         on_pair_count_check=on_pair_count_check,
+        self_consistency_n=self_consistency_n,
     )
     if on_consistency_report is not None and not on_consistency_report(report):
         raise GenerationAbortedError(
@@ -226,6 +231,7 @@ async def run_generate_strategy(
     on_stage: OnStage | None = None,
     on_pair_count_check: Callable[[int], bool] | None = None,
     on_consistency_report: Callable[[ConsistencyReport], bool] | None = None,
+    self_consistency_n: int = 1,
 ) -> StrategyRunResult:
     registry = open_registry(project_root)
     require_nonempty_registry(registry)
@@ -233,7 +239,7 @@ async def run_generate_strategy(
     run_id = run_id or new_run_id()
     ledger = RunLedger(driftpin_dir(project_root), run_id=run_id)
     consistency_report = await _run_consistency_stage(
-        provider, registry, ledger, on_stage, on_pair_count_check, on_consistency_report
+        provider, registry, ledger, on_stage, on_pair_count_check, on_consistency_report, self_consistency_n
     )
     strategy = await generate_strategy_only(
         provider, registry.requirements, run_id=run_id, ledger=ledger, on_stage=on_stage
@@ -281,6 +287,7 @@ async def run_generate_cases(
     on_pair_count_check: Callable[[int], bool] | None = None,
     on_consistency_report: Callable[[ConsistencyReport], bool] | None = None,
     fill_call_delay_seconds: float = DEFAULT_FILL_CALL_DELAY_SECONDS,
+    self_consistency_n: int = 1,
 ) -> CasesRunResult:
     registry = open_registry(project_root)
     require_nonempty_registry(registry)
@@ -288,7 +295,7 @@ async def run_generate_cases(
     run_id = run_id or new_run_id()
     ledger = RunLedger(driftpin_dir(project_root), run_id=run_id)
     consistency_report = await _run_consistency_stage(
-        provider, registry, ledger, on_stage, on_pair_count_check, on_consistency_report
+        provider, registry, ledger, on_stage, on_pair_count_check, on_consistency_report, self_consistency_n
     )
     pipeline_result = await run_pipeline(
         provider,

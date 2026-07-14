@@ -47,6 +47,13 @@ class ConsistencyVerdict(StrEnum):
     THRESHOLD_MISMATCH = "threshold_mismatch"
     SILENCE_GAP = "silence_gap"
     MODAL_AMBIGUITY = "modal_ambiguity"
+    # Never returned by a single checker call -- the prompt doesn't mention
+    # it and the model is never asked to produce it. `checker.py` assigns
+    # this itself when self-consistency mode (N>1 independent verdict calls
+    # on the same pair) finds disagreement: taking a silent majority would
+    # hide exactly the instability self-consistency exists to surface, so
+    # an ambiguous pair is flagged for a human instead of resolved by vote.
+    FLAGGED_FOR_REVIEW = "flagged_for_review"
 
 
 class ConsistencyCheckResult(BaseModel):
@@ -133,3 +140,7 @@ class ConsistencyReport(BaseModel):
     @property
     def modal_ambiguities(self) -> int:
         return sum(1 for f in self.findings if f.verdict == ConsistencyVerdict.MODAL_AMBIGUITY)
+
+    @property
+    def flagged_for_review(self) -> int:
+        return sum(1 for f in self.findings if f.verdict == ConsistencyVerdict.FLAGGED_FOR_REVIEW)

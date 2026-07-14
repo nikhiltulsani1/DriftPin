@@ -29,6 +29,21 @@ a single, fixed, small cost (one call regardless of registry size), the
 same way the pipeline's own upstream extraction call isn't itself gated
 by any downstream guard. Everything AFTER it -- silence-gap resolution
 and every verdict call -- is gated behind the guard as before.
+
+`self_consistency_n` (default 1, meaning off) reruns each PAIR VERDICT
+call N independent times and compares the results, rather than trusting
+any single call -- this is specifically an experiment aimed at
+compliance/regulatory-class pairs (e.g. unlink-vs-GDPR), where a live
+run showed the model returning `consistent` on a pair that a human would
+call a real gap; a single low-temperature call doesn't reveal whether
+that verdict was confident or a coin flip. Disagreement across the N
+calls is never resolved by silent majority vote -- that would hide
+exactly the instability this mode exists to surface -- it's surfaced as
+`ConsistencyVerdict.FLAGGED_FOR_REVIEW` instead, a value the model is
+never asked for and never returns itself. NFR-applicability and entity-
+extraction calls are NOT repeated under self-consistency; only the final
+per-pair verdict is, since that's the call self-consistency was
+requested for.
 """
 
 from __future__ import annotations
@@ -93,6 +108,36 @@ async def _check_pair(
     return raw
 
 
+async def _check_pair_with_self_consistency(
+    provider: LLMProvider,
+    checker_def: AgentDefinition,
+    pair: ConsistencyPair,
+    ledger: RunLedger | None,
+    self_consistency_n: int,
+) -> ConsistencyCheckResult:
+    """`self_consistency_n <= 1` is the default, unchanged single-call
+    path. N>1 issues N independent calls on the SAME pair and requires
+    unanimous agreement; any disagreement becomes `FLAGGED_FOR_REVIEW`
+    rather than a silently-chosen majority verdict."""
+    if self_consistency_n <= 1:
+        return await _check_pair(provider, checker_def, pair, ledger)
+
+    results = [await _check_pair(provider, checker_def, pair, ledger) for _ in range(self_consistency_n)]
+    verdicts = {result.verdict for result in results}
+    if len(verdicts) == 1:
+        return results[0]
+
+    summary = "; ".join(
+        f"{result.verdict.value}"
+        + (f" ({result.explanation})" if result.explanation else "")
+        for result in results
+    )
+    return ConsistencyCheckResult(
+        verdict=ConsistencyVerdict.FLAGGED_FOR_REVIEW,
+        explanation=f"{self_consistency_n} independent checks disagreed: {summary}",
+    )
+
+
 async def _nfr_applies_to_requirement(
     provider: LLMProvider,
     applicability_def: AgentDefinition,
@@ -107,13 +152,15 @@ async def _nfr_applies_to_requirement(
     return raw.applicable
 
 
-def _estimated_silence_gap_cost(candidates: list[SilenceGapCandidate]) -> int:
+def _estimated_silence_gap_cost(candidates: list[SilenceGapCandidate], self_consistency_n: int = 1) -> int:
     """Worst-case call count for resolving every candidate: every
-    applicability check comes back False (no short-circuit) plus one
-    verdict call for the pair it then becomes. A candidate with no
-    global NFRs to check still costs exactly 1 (the verdict call for its
-    already-definite gap)."""
-    return sum(len(candidate.candidate_global_nfrs) + 1 for candidate in candidates)
+    applicability check comes back False (no short-circuit) plus
+    `self_consistency_n` verdict call(s) for the pair it then becomes.
+    Applicability calls are never repeated under self-consistency -- only
+    the verdict call is -- so only that term scales with N. A candidate
+    with no global NFRs to check still costs exactly `self_consistency_n`
+    (the verdict call(s) for its already-definite gap)."""
+    return sum(len(candidate.candidate_global_nfrs) + self_consistency_n for candidate in candidates)
 
 
 async def _resolve_silence_gap_pairs(
@@ -173,6 +220,7 @@ async def run_consistency_check(
     nfrs: list[NonFunctionalRequirement],
     ledger: RunLedger | None = None,
     on_pair_count_check: Callable[[int], bool] | None = None,
+    self_consistency_n: int = 1,
 ) -> ConsistencyReport:
     deterministic_pairs = enumerate_consistency_pairs(requirements, nfrs)
     nfrs_by_id = {nfr.nfr_id: nfr for nfr in nfrs}
@@ -182,7 +230,8 @@ async def run_consistency_check(
     # deterministic substitute, so it runs regardless of the guard
     # decision below (see this module's docstring). Its result lets the
     # guard estimate include the EXACT req_vs_lifecycle pair count,
-    # rather than a guess.
+    # rather than a guess. Not repeated under self-consistency -- only
+    # the final verdict call is.
     entity_links = await _extract_lifecycle_entities(provider, requirements, ledger)
     requirements_by_id = {r.requirement_id: r for r in requirements}
     lifecycle_pairs = enumerate_req_vs_lifecycle_pairs(entity_links, requirements_by_id)
@@ -190,9 +239,12 @@ async def run_consistency_check(
     # Guarded before any FURTHER LLM call -- the silence-gap applicability
     # checks and every verdict call, none of which the pair count alone
     # would capture, since those happen ahead of and separately from the
-    # per-pair verdict loop below.
+    # per-pair verdict loop below. The verdict-call terms are scaled by
+    # self_consistency_n so the guard reflects the real cost when it's on.
     estimated_total = (
-        len(deterministic_pairs) + _estimated_silence_gap_cost(silence_candidates) + len(lifecycle_pairs)
+        len(deterministic_pairs) * self_consistency_n
+        + _estimated_silence_gap_cost(silence_candidates, self_consistency_n)
+        + len(lifecycle_pairs) * self_consistency_n
     )
     over_budget = estimated_total > PAIR_COUNT_WARNING_THRESHOLD
     if over_budget and on_pair_count_check is not None and not on_pair_count_check(estimated_total):
@@ -208,7 +260,7 @@ async def run_consistency_check(
     checker_def = load_agent_definition("consistency-checker")
     findings: list[ConsistencyFinding] = []
     for pair in pairs:
-        result = await _check_pair(provider, checker_def, pair, ledger)
+        result = await _check_pair_with_self_consistency(provider, checker_def, pair, ledger, self_consistency_n)
         if result.verdict == ConsistencyVerdict.CONSISTENT:
             continue
         findings.append(
@@ -234,6 +286,8 @@ async def run_consistency_check(
                 "nfr_applicability_calls": applicability_calls,
                 "lifecycle_entities_extracted": len(entity_links),
                 "lifecycle_pairs": len(lifecycle_pairs),
+                "self_consistency_n": self_consistency_n,
+                "flagged_for_review": report.flagged_for_review,
                 "contradictions": report.contradictions,
                 "threshold_mismatches": report.threshold_mismatches,
                 "silence_gaps": report.silence_gaps,

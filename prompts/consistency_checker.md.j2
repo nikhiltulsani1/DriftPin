@@ -21,6 +21,8 @@ Classify your answer as exactly one of:
 
 Do not invent interpretations, assumptions, or scenarios beyond what the texts actually say. If the texts are simply about different topics with no overlap, that is `consistent`, not a gap.
 
+Regulatory, compliance, and privacy terms (GDPR, data retention, consent, right to erasure/deletion, audit trail, and similar) require EXACT mechanism alignment, not thematic similarity. Two texts that both happen to mention "deletion" or "data" are not automatically consistent, or automatically in tension — check specifically whether they describe the SAME event, trigger, or action. A text about deleting a user's account and a text about deleting a linked payment method are not the same event even though both use the word "delete." Do not wave through a real compliance gap as `consistent` just because no single sentence explicitly contradicts another; a text that grants a right (e.g. "the user may unlink an account") without saying whether that also satisfies a stated compliance obligation (e.g. "GDPR-compliant data deletion") elsewhere in the document is a genuine `silence_gap`, not `consistent` by default.
+
 Requirement (Req ID: {{ pair.req_id_1 }}):
 Text 1: "{{ pair.text_1 }}"
 

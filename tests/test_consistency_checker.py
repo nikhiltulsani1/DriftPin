@@ -413,3 +413,77 @@ async def test_lifecycle_all_states_addressed_produces_zero_findings(mock_provid
 
     assert report.pairs_enumerated == 5
     assert report.findings == []
+
+
+@pytest.mark.asyncio
+async def test_self_consistency_unanimous_verdict_used_as_is(mock_provider_factory) -> None:
+    """self_consistency_n=3, all three independent checks agree -- the
+    unanimous verdict is used directly, not flagged."""
+    r1 = _requirement(
+        "R-1",
+        "A user may not set a budget of zero.",
+        acceptance_criteria=[AcceptanceCriterion(ac_id="AC-1", text="Budget entry field rejects values below 1.")],
+    )
+
+    provider = mock_provider_factory(
+        [
+            _no_entities_response(),
+            _response("threshold_mismatch", "R-1 prohibits zero while AC-1 rejects anything below 1."),
+            _response("threshold_mismatch", "R-1 prohibits zero while AC-1 rejects anything below 1."),
+            _response("threshold_mismatch", "R-1 prohibits zero while AC-1 rejects anything below 1."),
+        ]
+    )
+
+    report = await run_consistency_check(provider, [r1], [], self_consistency_n=3)
+
+    assert report.pairs_enumerated == 1
+    assert len(report.findings) == 1
+    assert report.findings[0].verdict == ConsistencyVerdict.THRESHOLD_MISMATCH
+
+
+@pytest.mark.asyncio
+async def test_self_consistency_disagreement_flags_for_review_not_majority_vote(mock_provider_factory) -> None:
+    """self_consistency_n=3, the three independent checks disagree (2
+    "consistent" vs 1 "contradiction") -- must NOT silently take the
+    2-1 majority. The disagreement itself becomes the finding."""
+    r1 = _requirement(
+        "R-1",
+        "A user may not set a budget of zero.",
+        acceptance_criteria=[AcceptanceCriterion(ac_id="AC-1", text="Budget entry field rejects values below 1.")],
+    )
+
+    provider = mock_provider_factory(
+        [
+            _no_entities_response(),
+            _response("consistent"),
+            _response("contradiction", "Zero prohibition vs below-1 rejection."),
+            _response("consistent"),
+        ]
+    )
+
+    report = await run_consistency_check(provider, [r1], [], self_consistency_n=3)
+
+    assert report.pairs_enumerated == 1
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.verdict == ConsistencyVerdict.FLAGGED_FOR_REVIEW
+    assert finding.severity == ConsistencyFindingSeverity.ASSUMPTION
+    assert "3 independent checks disagreed" in finding.description
+
+
+@pytest.mark.asyncio
+async def test_self_consistency_scales_pair_count_budget_estimate(mock_provider_factory) -> None:
+    """The budget guard's estimate must reflect the real cost of
+    self-consistency mode -- N verdict calls per pair, not 1."""
+    requirements = [_requirement_with_many_acs(i) for i in range(15)]
+    pair_count = len(requirements) * 15
+
+    provider = mock_provider_factory([_no_entities_response()])
+
+    with pytest.raises(ConsistencyCheckAbortedError) as exc_info:
+        await run_consistency_check(
+            provider, requirements, [], on_pair_count_check=lambda _count: False, self_consistency_n=3
+        )
+
+    assert exc_info.value.pair_count == pair_count * 3
+    assert provider.call_count == 1

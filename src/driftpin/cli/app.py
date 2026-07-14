@@ -100,7 +100,8 @@ def _make_consistency_report_check(skip_confirmation: bool) -> Callable[[Consist
         summary = (
             f"Found {len(report.findings)} spec issue(s) ({report.contradictions} contradiction(s), "
             f"{report.threshold_mismatches} threshold mismatch(es), {report.silence_gaps} silence "
-            f"gap(s), {report.modal_ambiguities} modal ambiguity(ies))."
+            f"gap(s), {report.modal_ambiguities} modal ambiguity(ies), {report.flagged_for_review} "
+            f"flagged for review)."
         )
         if not report.findings:
             console.print(f"[green]{summary}[/green]")
@@ -187,6 +188,16 @@ def generate_strategy(
     ),
     out: Path = typer.Option(Path("./out"), "--out", help="Directory to write the strategy report to."),
     yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt (for CI)."),
+    self_consistency_n: int = typer.Option(
+        1,
+        "--self-consistency-n",
+        help=(
+            "Rerun each spec-consistency verdict this many times independently and require "
+            "unanimous agreement (disagreement is flagged for review, not majority-voted). "
+            "1 = off (default). Multiplies consistency-check LLM calls by N -- meant for a "
+            "deliberate GATE-style verification run, not routine use."
+        ),
+    ),
 ) -> None:
     """Generate a test strategy (scenarios) from the requirement registry, without cases."""
     project_root = project_root or Path.cwd()
@@ -202,6 +213,7 @@ def generate_strategy(
                 out,
                 on_pair_count_check=_make_pair_count_check(yes),
                 on_consistency_report=_make_consistency_report_check(yes),
+                self_consistency_n=self_consistency_n,
             )
         )
     except EmptyRegistryError as exc:
@@ -242,6 +254,16 @@ def generate_cases(
     ),
     out: Path = typer.Option(Path("./out"), "--out", help="Directory to write generated artifacts to."),
     yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt (for CI)."),
+    self_consistency_n: int = typer.Option(
+        1,
+        "--self-consistency-n",
+        help=(
+            "Rerun each spec-consistency verdict this many times independently and require "
+            "unanimous agreement (disagreement is flagged for review, not majority-voted). "
+            "1 = off (default). Multiplies consistency-check LLM calls by N -- meant for a "
+            "deliberate GATE-style verification run, not routine use."
+        ),
+    ),
 ) -> None:
     """Run the full strategy -> test cases -> review pipeline and render Excel + Markdown."""
     project_root = project_root or Path.cwd()
@@ -258,6 +280,7 @@ def generate_cases(
                 on_scenario_count_check=_make_scenario_count_check(yes),
                 on_pair_count_check=_make_pair_count_check(yes),
                 on_consistency_report=_make_consistency_report_check(yes),
+                self_consistency_n=self_consistency_n,
             )
         )
     except EmptyRegistryError as exc:
