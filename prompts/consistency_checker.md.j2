@@ -6,14 +6,18 @@ Compare these two specification texts. Do they:
 - leave a gap where one text implies behavior that the other does not address, so a reader is left to guess?
 - use different modal strength for what appears to be the same behavior (one says "must"/"shall", the other says "should", "may", or "can")?
 
-If Text 2 is empty, you are instead judging whether Text 1 describes a state-changing action (something that creates, sends, generates, converts, or deletes something) while never specifying what happens if that action fails — a silence gap on its own, not a comparison to a second text.
+{% if pair.pair_type.value == "req_vs_silence" %}
+There is no second text. Instead, judge whether Text 1 describes a state-changing action (something that creates, sends, generates, converts, or deletes something) while never specifying what happens if that action fails — a silence gap on its own, not a comparison to a second text.
+{% elif pair.pair_type.value == "req_vs_lifecycle" %}
+There is no second text. Instead, judge whether Text 1 — which references the entity "{{ pair.entity }}" — specifies what happens when that entity reaches the "{{ pair.lifecycle_state }}" state. For example, for the "deleted" state: does the text say what happens when this entity is deleted or removed? For "conflicting": does it say how the system resolves two competing changes to this entity? For "expired_out_of_range": does it say what happens when a boundary or time window tied to this entity is exceeded? Judge only the specific state named — do not flag a gap in some other state the text happens to also leave open.
+{% endif %}
 
 Classify your answer as exactly one of:
 - `contradiction` — the two texts state mutually exclusive mandates.
 - `threshold_mismatch` — same concept, different numbers, boundaries, or time scopes.
-- `silence_gap` — an action is specified with no failure/error handling addressed anywhere in the given text(s).
+- `silence_gap` — an action, or a specific entity lifecycle state, is left unaddressed anywhere in the given text(s).
 - `modal_ambiguity` — the same behavior is stated with different modal strength ("must" vs "should", etc.) across the two texts.
-- `consistent` — none of the above apply; the texts do not conflict and there is no unaddressed gap.
+- `consistent` — none of the above apply; the text(s) do not conflict and there is no unaddressed gap.
 
 Do not invent interpretations, assumptions, or scenarios beyond what the texts actually say. If the texts are simply about different topics with no overlap, that is `consistent`, not a gap.
 
@@ -24,7 +28,7 @@ Text 1: "{{ pair.text_1 }}"
 Compared against ({{ pair.pair_type.value }}, ID: {{ pair.req_id_2_or_ac_id_or_nfr_id }}):
 Text 2: "{{ pair.text_2 }}"
 {% else %}
-(No second text — judge Text 1 alone for a silence gap on failure handling, per the `req_vs_silence` instructions above.)
+(No second text — see the pair-type-specific instructions above.)
 {% endif %}
 
 Return only the structured JSON: `verdict` (one of the five values above) and `explanation` (one sentence stating the tension — leave empty if `verdict` is `consistent`).

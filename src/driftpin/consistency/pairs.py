@@ -9,7 +9,7 @@ a domain entity, and against its own silence on failure handling. Python
 owns which pairs get checked; the LLM in `checker.py` only ever judges
 pairs it's handed, never decides what's worth comparing.
 
-Three of the four pair types (req_vs_ac, req_vs_nfr, req_vs_peer) are
+Three of the five pair types (req_vs_ac, req_vs_nfr, req_vs_peer) are
 fully deterministic and enumerated here with zero LLM calls. The fourth
 (req_vs_silence) is only PARTIALLY deterministic: this module identifies
 *candidates* (an action-describing requirement whose own text says
@@ -27,6 +27,17 @@ presence alone was found to be too permissive live (PocketBudget's one
 global "sync failure: retry..." NFR silently "covered" all nine
 requirements, including ones with nothing to do with syncing).
 
+The fifth (req_vs_lifecycle) enumerates ONLY from already-extracted
+(entity, requirement_ids) links -- `enumerate_req_vs_lifecycle_pairs`
+below is itself zero-LLM, but the entity/requirement links it consumes
+require a one-time extraction call `checker.py` makes before calling it
+(no deterministic pass reliably identifies "budget", "override", or
+"account" as domain entities worth checking a lifecycle against, the
+same reasoning that makes peer-pairing's token overlap a *bound*, not a
+semantic judgment). The candidate lifecycle states themselves ARE fixed
+and deterministic (`LIFECYCLE_STATES` below) -- only entity identification
+needs a model.
+
 Peer-requirement pairing is bounded by a token-overlap kNN filter, not
 exhaustive N-choose-2 pairing: an N-requirement PRD would otherwise
 produce O(N^2) peer pairs, most of which share no vocabulary at all and
@@ -43,8 +54,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from driftpin.schemas.consistency import ConsistencyPair, PairType
+from driftpin.schemas.consistency import ConsistencyPair, EntityRequirementLink, PairType
 from driftpin.schemas.requirements import NfrScope, NonFunctionalRequirement, Requirement
+
+LIFECYCLE_STATES = ("created", "modified", "deleted", "conflicting", "expired_out_of_range")
 
 _TOKEN_RE = re.compile(r"[a-z]+")
 _MANDATORY_RE = re.compile(r"\bmust\b|\bshall\b", re.IGNORECASE)
@@ -254,14 +267,52 @@ def enumerate_req_vs_peer_pairs(requirements: list[Requirement]) -> list[Consist
     ]
 
 
+def enumerate_req_vs_lifecycle_pairs(
+    entity_links: list[EntityRequirementLink], requirements_by_id: dict[str, Requirement]
+) -> list[ConsistencyPair]:
+    """Zero LLM calls. Given already-extracted (entity, requirement_ids)
+    links -- extraction itself needs a model call, made once by
+    `checker.py` before this runs -- deterministically enumerates one pair
+    per (requirement, entity, lifecycle state): does THIS requirement's
+    own text say what happens when the entity it references reaches this
+    state. Every state check is a single-text judgment, like
+    req_vs_silence, not a requirement-vs-requirement comparison -- even a
+    "does anything say what happens when two overrides conflict"-style
+    gap on ONE requirement fits this shape, no second requirement needed.
+    An entity link naming a requirement_id absent from `requirements_by_id`
+    (a hallucinated ID from the extraction call) is silently skipped, the
+    same anti-hallucination discipline every other extraction output in
+    this project gets."""
+    pairs: list[ConsistencyPair] = []
+    for link in entity_links:
+        for requirement_id in link.requirement_ids:
+            requirement = requirements_by_id.get(requirement_id)
+            if requirement is None:
+                continue
+            for state in LIFECYCLE_STATES:
+                pairs.append(
+                    ConsistencyPair(
+                        pair_type=PairType.REQ_VS_LIFECYCLE,
+                        req_id_1=requirement.requirement_id,
+                        req_id_2_or_ac_id_or_nfr_id=None,
+                        text_1=requirement_full_text(requirement),
+                        text_2="",
+                        entity=link.entity,
+                        lifecycle_state=state,
+                    )
+                )
+    return pairs
+
+
 def enumerate_consistency_pairs(
     requirements: list[Requirement], nfrs: list[NonFunctionalRequirement]
 ) -> list[ConsistencyPair]:
     """The three fully-deterministic pair types only (req_vs_ac, req_vs_nfr,
-    req_vs_peer). req_vs_silence pairs are NOT included here -- resolving a
-    silence-gap candidate can require an LLM applicability judgment (see
-    `find_silence_gap_candidates`), so `checker.py` computes those
-    separately and merges them into its own final pair list."""
+    req_vs_peer). req_vs_silence and req_vs_lifecycle pairs are NOT
+    included here -- both can require an LLM step before the final pair
+    list is known (an applicability judgment, or entity extraction), so
+    `checker.py` computes those separately and merges them into its own
+    final pair list."""
     nfrs_by_id = {nfr.nfr_id: nfr for nfr in nfrs}
     return [
         *enumerate_req_vs_ac_pairs(requirements),

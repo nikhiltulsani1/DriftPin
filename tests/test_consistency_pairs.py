@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from driftpin.consistency.pairs import (
+    LIFECYCLE_STATES,
     enumerate_consistency_pairs,
     enumerate_req_vs_ac_pairs,
+    enumerate_req_vs_lifecycle_pairs,
     enumerate_req_vs_nfr_pairs,
     enumerate_req_vs_peer_pairs,
     extract_modal,
     find_silence_gap_candidates,
 )
-from driftpin.schemas.consistency import PairType
+from driftpin.schemas.consistency import EntityRequirementLink, PairType
 from driftpin.schemas.requirements import (
     AcceptanceCriterion,
     NfrScope,
@@ -226,3 +228,46 @@ def test_enumerate_consistency_pairs_combines_three_deterministic_pair_types() -
     assert PairType.REQ_VS_AC in types_present
     assert PairType.REQ_VS_NFR in types_present
     assert PairType.REQ_VS_PEER in types_present
+
+
+def test_enumerate_req_vs_lifecycle_pairs_emits_one_pair_per_fixed_state() -> None:
+    r1 = _requirement("R-3", "Users can set a monthly budget for each spending category.")
+    link = EntityRequirementLink(entity="budget", requirement_ids=["R-3"])
+
+    pairs = enumerate_req_vs_lifecycle_pairs([link], {"R-3": r1})
+
+    assert len(pairs) == len(LIFECYCLE_STATES)
+    assert {p.lifecycle_state for p in pairs} == set(LIFECYCLE_STATES)
+    assert all(p.pair_type == PairType.REQ_VS_LIFECYCLE for p in pairs)
+    assert all(p.entity == "budget" for p in pairs)
+    assert all(p.req_id_1 == "R-3" for p in pairs)
+    assert all(p.text_2 == "" for p in pairs)
+
+
+def test_enumerate_req_vs_lifecycle_pairs_covers_every_linked_requirement() -> None:
+    """Damage 3's exact shape: a SINGLE requirement's own entity, checked
+    against a state its text never addresses -- no second requirement
+    needed, unlike req_vs_peer. Also verifies an entity referenced by
+    multiple requirements produces pairs for each."""
+    budget_setup = _requirement("R-3", "Users can set a monthly budget for each spending category.")
+    alerts = _requirement("R-4", "The app sends a push notification when spending nears the budget.")
+    link = EntityRequirementLink(entity="budget", requirement_ids=["R-3", "R-4"])
+
+    pairs = enumerate_req_vs_lifecycle_pairs([link], {"R-3": budget_setup, "R-4": alerts})
+
+    assert len(pairs) == 2 * len(LIFECYCLE_STATES)
+    assert {p.req_id_1 for p in pairs} == {"R-3", "R-4"}
+
+
+def test_enumerate_req_vs_lifecycle_pairs_skips_hallucinated_requirement_ids() -> None:
+    """An entity link naming a requirement_id the extraction call
+    invented (not in the real registry) must be silently skipped, not
+    trusted -- the same anti-hallucination discipline every other
+    extraction output in this project gets."""
+    r1 = _requirement("R-1", "Users can set a monthly budget for each spending category.")
+    link = EntityRequirementLink(entity="budget", requirement_ids=["R-1", "R-999-does-not-exist"])
+
+    pairs = enumerate_req_vs_lifecycle_pairs([link], {"R-1": r1})
+
+    assert {p.req_id_1 for p in pairs} == {"R-1"}
+    assert len(pairs) == len(LIFECYCLE_STATES)

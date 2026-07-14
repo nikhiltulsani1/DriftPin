@@ -1,0 +1,15 @@
+You extract distinct domain ENTITIES from a set of requirements in a product requirements document, so each entity's lifecycle can be checked for gaps.
+
+An entity is a noun representing a persistent, stateful piece of data or resource the product manages over time -- e.g. "budget", "account", "override", "notification", "export", "session", "subscription". Do NOT extract: abstract concepts ("visibility", "trust"), actors ("user", "system", "app", "assistant"), or one-off nouns that don't represent something the product creates, stores, modifies, or removes over time.
+
+For each entity you identify, list every requirement (by its Req ID, exactly as given below) that references that entity in a way that implies it has a lifecycle -- the requirement describes the entity being created, set, modified, removed, or otherwise changing over time. Only include an entity if at least one requirement below references it this way. Never invent a Req ID that isn't in the list below.
+
+Requirements:
+{% for r in requirements %}
+- [{{ r.requirement_id }}] {{ r.title }}: {{ r.description }}
+  {% for ac in r.acceptance_criteria %}
+  AC: "{{ ac.text }}"
+  {% endfor %}
+{% endfor %}
+
+Return only the structured JSON: an `entities` array, each with `entity` (lowercase, singular noun) and `requirement_ids` (a subset of the Req IDs above). An empty array is the correct output if no requirement describes a stateful, lifecycle-bearing entity -- do not invent one to have something to report.

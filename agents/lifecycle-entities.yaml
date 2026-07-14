@@ -1,0 +1,6 @@
+name: lifecycle-entities
+model_binding: null
+system_prompt: lifecycle_entities.md.j2
+tools: []
+output_schema: driftpin.schemas.consistency.LifecycleEntityExtraction
+max_iterations: 1

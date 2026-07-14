@@ -19,6 +19,16 @@ below asks, per candidate NFR, whether it actually governs that specific
 requirement's action before crediting it -- scoped NFRs (an explicit,
 human-curated link) still resolve for free, with no LLM call, since
 there's no ambiguity to judge there.
+
+req_vs_lifecycle pairs need a one-time entity-extraction call
+(`_extract_lifecycle_entities`) before `pairs.enumerate_req_vs_lifecycle_pairs`
+can run at all -- unlike req_vs_ac/nfr/peer, there's no registry field
+recording which requirements reference which domain entities. This call
+always runs, even if the pair-count budget guard is later declined: it's
+a single, fixed, small cost (one call regardless of registry size), the
+same way the pipeline's own upstream extraction call isn't itself gated
+by any downstream guard. Everything AFTER it -- silence-gap resolution
+and every verdict call -- is gated behind the guard as before.
 """
 
 from __future__ import annotations
@@ -31,6 +41,7 @@ from driftpin.consistency.pairs import (
     SilenceGapCandidate,
     build_silence_gap_pair,
     enumerate_consistency_pairs,
+    enumerate_req_vs_lifecycle_pairs,
     find_silence_gap_candidates,
 )
 from driftpin.ledger.ledger import RunLedger
@@ -41,6 +52,8 @@ from driftpin.schemas.consistency import (
     ConsistencyPair,
     ConsistencyReport,
     ConsistencyVerdict,
+    EntityRequirementLink,
+    LifecycleEntityExtraction,
     NfrApplicabilityResult,
     PairType,
     severity_for_verdict,
@@ -129,6 +142,31 @@ async def _resolve_silence_gap_pairs(
     return pairs, applicability_calls
 
 
+async def _extract_lifecycle_entities(
+    provider: LLMProvider,
+    requirements: list[Requirement],
+    ledger: RunLedger | None,
+) -> list[EntityRequirementLink]:
+    """One call, always. Filters `requirement_ids` against the real
+    registry the same way every other extraction output in this project
+    is filtered -- the extracting LLM never gets to assign or invent IDs
+    that survive unchecked into pair enumeration."""
+    if not requirements:
+        return []
+    extraction_def = load_agent_definition("lifecycle-entities")
+    raw = await run_agent(extraction_def, provider, context={"requirements": requirements}, ledger=ledger)
+    assert isinstance(raw, LifecycleEntityExtraction)
+    known_ids = {r.requirement_id for r in requirements}
+    return [
+        EntityRequirementLink(
+            entity=link.entity,
+            requirement_ids=[rid for rid in link.requirement_ids if rid in known_ids],
+        )
+        for link in raw.entities
+        if link.entity.strip()
+    ]
+
+
 async def run_consistency_check(
     provider: LLMProvider,
     requirements: list[Requirement],
@@ -140,17 +178,28 @@ async def run_consistency_check(
     nfrs_by_id = {nfr.nfr_id: nfr for nfr in nfrs}
     silence_candidates = find_silence_gap_candidates(requirements, nfrs_by_id)
 
-    # Guarded up front, before any LLM call at all -- including the
-    # silence-gap applicability checks, which the pair count alone
-    # wouldn't capture, since those checks happen ahead of and separately
-    # from the per-pair verdict loop below.
-    estimated_total = len(deterministic_pairs) + _estimated_silence_gap_cost(silence_candidates)
+    # The one fixed, always-spent call: entity extraction has no
+    # deterministic substitute, so it runs regardless of the guard
+    # decision below (see this module's docstring). Its result lets the
+    # guard estimate include the EXACT req_vs_lifecycle pair count,
+    # rather than a guess.
+    entity_links = await _extract_lifecycle_entities(provider, requirements, ledger)
+    requirements_by_id = {r.requirement_id: r for r in requirements}
+    lifecycle_pairs = enumerate_req_vs_lifecycle_pairs(entity_links, requirements_by_id)
+
+    # Guarded before any FURTHER LLM call -- the silence-gap applicability
+    # checks and every verdict call, none of which the pair count alone
+    # would capture, since those happen ahead of and separately from the
+    # per-pair verdict loop below.
+    estimated_total = (
+        len(deterministic_pairs) + _estimated_silence_gap_cost(silence_candidates) + len(lifecycle_pairs)
+    )
     over_budget = estimated_total > PAIR_COUNT_WARNING_THRESHOLD
     if over_budget and on_pair_count_check is not None and not on_pair_count_check(estimated_total):
         raise ConsistencyCheckAbortedError(estimated_total)
 
     silence_pairs, applicability_calls = await _resolve_silence_gap_pairs(provider, silence_candidates, ledger)
-    pairs = [*deterministic_pairs, *silence_pairs]
+    pairs = [*deterministic_pairs, *silence_pairs, *lifecycle_pairs]
 
     pairs_by_type: dict[str, int] = {}
     for pair in pairs:
@@ -183,6 +232,8 @@ async def run_consistency_check(
                 "pair_calls": len(pairs),
                 "silence_gap_candidates": len(silence_candidates),
                 "nfr_applicability_calls": applicability_calls,
+                "lifecycle_entities_extracted": len(entity_links),
+                "lifecycle_pairs": len(lifecycle_pairs),
                 "contradictions": report.contradictions,
                 "threshold_mismatches": report.threshold_mismatches,
                 "silence_gaps": report.silence_gaps,

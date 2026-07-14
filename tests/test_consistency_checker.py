@@ -55,6 +55,28 @@ def _applicability_response(applicable: bool, reason: str = "") -> CompletionRes
     )
 
 
+def _no_entities_response() -> CompletionResult:
+    """`run_consistency_check` always spends exactly one call extracting
+    lifecycle entities before anything else -- this is that call's
+    response for fixtures that aren't testing req_vs_lifecycle at all,
+    keeping their pair counts identical to before Work Item 2."""
+    return CompletionResult(
+        content=json.dumps({"entities": []}),
+        tokens_in=1,
+        tokens_out=1,
+        stop_reason="end_turn",
+    )
+
+
+def _entities_response(entities: list[dict]) -> CompletionResult:
+    return CompletionResult(
+        content=json.dumps({"entities": entities}),
+        tokens_in=1,
+        tokens_out=1,
+        stop_reason="end_turn",
+    )
+
+
 _SYNC_RETRY_NFR = NonFunctionalRequirement(
     nfr_id="NFR-1",
     text="Sync failure: retry up to 3 times before surfacing error to user.",
@@ -76,7 +98,10 @@ async def test_fixture_p_contradictory_peer_requirements_flagged_as_blocker(mock
     r2 = _requirement("R-2", "User account data must be retained for 7 years for compliance purposes.")
 
     provider = mock_provider_factory(
-        [_response("contradiction", "R-1 mandates permanent erasure while R-2 mandates 7-year retention.")]
+        [
+            _no_entities_response(),
+            _response("contradiction", "R-1 mandates permanent erasure while R-2 mandates 7-year retention."),
+        ]
     )
 
     report = await run_consistency_check(provider, [r1, r2], [])
@@ -100,7 +125,10 @@ async def test_fixture_q_requirement_vs_own_ac_threshold_mismatch(mock_provider_
     )
 
     provider = mock_provider_factory(
-        [_response("threshold_mismatch", "R-1 prohibits zero while AC-1 rejects anything below 1.")]
+        [
+            _no_entities_response(),
+            _response("threshold_mismatch", "R-1 prohibits zero while AC-1 rejects anything below 1."),
+        ]
     )
 
     report = await run_consistency_check(provider, [r1], [])
@@ -123,7 +151,10 @@ async def test_fixture_r_action_with_no_failure_path_is_silence_gap(mock_provide
     )
 
     provider = mock_provider_factory(
-        [_response("silence_gap", "No failure path is specified if summary generation fails.")]
+        [
+            _no_entities_response(),
+            _response("silence_gap", "No failure path is specified if summary generation fails."),
+        ]
     )
 
     report = await run_consistency_check(provider, [r1], [])
@@ -152,7 +183,10 @@ async def test_fixture_s_modal_mismatch_between_requirement_and_its_ac(mock_prov
     )
 
     provider = mock_provider_factory(
-        [_response("modal_ambiguity", "R-1 says 'should' while AC-1 says 'must' for the same behavior.")]
+        [
+            _no_entities_response(),
+            _response("modal_ambiguity", "R-1 says 'should' while AC-1 says 'must' for the same behavior."),
+        ]
     )
 
     report = await run_consistency_check(provider, [r1], [])
@@ -173,7 +207,7 @@ async def test_fixture_t_consistent_peers_produce_zero_findings(mock_provider_fa
     r1 = _requirement("R-1", "Users can view their transaction history in the Dashboard app.")
     r2 = _requirement("R-2", "Users can view their monthly budget totals in the Dashboard app.")
 
-    provider = mock_provider_factory([_response("consistent")])
+    provider = mock_provider_factory([_no_entities_response(), _response("consistent")])
 
     report = await run_consistency_check(provider, [r1, r2], [])
 
@@ -203,17 +237,21 @@ def _requirement_with_many_acs(index: int) -> Requirement:
 
 
 @pytest.mark.asyncio
-async def test_pair_count_budget_guard_aborts_before_any_llm_call_when_declined(mock_provider_factory) -> None:
+async def test_pair_count_budget_guard_aborts_before_any_verdict_call_when_declined(mock_provider_factory) -> None:
+    """Entity extraction is the ONE fixed call that always precedes the
+    guard decision (see `run_consistency_check`'s docstring) -- declining
+    still means zero silence-applicability calls and zero verdict calls,
+    just not zero calls overall."""
     requirements = [_requirement_with_many_acs(i) for i in range(15)]
     assert len(requirements) * 15 > PAIR_COUNT_WARNING_THRESHOLD
 
-    provider = mock_provider_factory([])  # any LLM call before the abort fails the test loudly
+    provider = mock_provider_factory([_no_entities_response()])
 
     with pytest.raises(ConsistencyCheckAbortedError) as exc_info:
         await run_consistency_check(provider, requirements, [], on_pair_count_check=lambda _count: False)
 
     assert exc_info.value.pair_count == 225
-    assert provider.call_count == 0
+    assert provider.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -222,7 +260,7 @@ async def test_pair_count_budget_guard_proceeds_when_accepted(mock_provider_fact
     pair_count = len(requirements) * 15
     seen_counts: list[int] = []
 
-    provider = mock_provider_factory([_response("consistent") for _ in range(pair_count)])
+    provider = mock_provider_factory([_no_entities_response(), *[_response("consistent") for _ in range(pair_count)]])
 
     report = await run_consistency_check(
         provider, requirements, [], on_pair_count_check=lambda count: (seen_counts.append(count), True)[1]
@@ -243,6 +281,7 @@ async def test_silence_gap_credited_when_global_nfr_applicability_confirmed(mock
 
     provider = mock_provider_factory(
         [
+            _no_entities_response(),
             _applicability_response(True, "The NFR explicitly names sync failure."),
             _response("consistent"),  # verdict for the req_vs_nfr pair this NFR also creates
         ]
@@ -266,6 +305,7 @@ async def test_silence_gap_flagged_when_global_nfr_not_applicable(mock_provider_
 
     provider = mock_provider_factory(
         [
+            _no_entities_response(),
             _applicability_response(False, "Sync retry policy has nothing to do with summary generation."),
             _response("consistent"),  # verdict for the req_vs_nfr pair this NFR also creates
             _response("silence_gap", "No failure path is specified if summary generation fails."),
@@ -301,6 +341,7 @@ async def test_regression_pocketbudget_zero_candidates_bug_is_fixed(mock_provide
 
     provider = mock_provider_factory(
         [
+            _no_entities_response(),
             _applicability_response(True, "Governs sync's own failure handling."),
             _applicability_response(False, "Sync retry policy is unrelated to summary generation."),
             _response("consistent"),  # req_vs_nfr verdict for R-1
@@ -317,3 +358,58 @@ async def test_regression_pocketbudget_zero_candidates_bug_is_fixed(mock_provide
     assert finding.verdict == ConsistencyVerdict.SILENCE_GAP
     assert finding.requirement_ids == ["R-9"]
     assert "R-1" not in finding.requirement_ids
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_gap_flagged_for_one_specific_state(mock_provider_factory) -> None:
+    """Damage 3's exact shape: a single requirement's own entity, checked
+    against a lifecycle state ("deleted") its text never addresses. No
+    peer requirement is needed for this gap to exist."""
+    budget_requirement = _requirement(
+        "R-3", "Users can set a monthly budget for each spending category. Budgets reset on the 1st of each month."
+    )
+
+    provider = mock_provider_factory(
+        [
+            _entities_response([{"entity": "budget", "requirement_ids": ["R-3"]}]),
+            _response("consistent"),  # created
+            _response("consistent"),  # modified
+            _response("silence_gap", "Nothing specifies what happens when a budget is deleted."),  # deleted
+            _response("consistent"),  # conflicting
+            _response("consistent"),  # expired_out_of_range
+        ]
+    )
+
+    report = await run_consistency_check(provider, [budget_requirement], [])
+
+    assert report.pairs_enumerated == 5
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.pair_type == PairType.REQ_VS_LIFECYCLE
+    assert finding.verdict == ConsistencyVerdict.SILENCE_GAP
+    assert finding.severity == ConsistencyFindingSeverity.ASSUMPTION
+    assert finding.requirement_ids == ["R-3"]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_all_states_addressed_produces_zero_findings(mock_provider_factory) -> None:
+    """Over-flagging guard for the new pair type: an entity referenced by
+    a requirement whose text genuinely addresses every lifecycle state
+    must not manufacture a finding just because the pairs were enumerated."""
+    thorough_requirement = _requirement(
+        "R-3",
+        "The system fully specifies how a budget is set up, changed, removed, resolved when conflicting "
+        "with another change, and treated once its time window has passed.",
+    )
+
+    provider = mock_provider_factory(
+        [
+            _entities_response([{"entity": "budget", "requirement_ids": ["R-3"]}]),
+            *[_response("consistent") for _ in range(5)],
+        ]
+    )
+
+    report = await run_consistency_check(provider, [thorough_requirement], [])
+
+    assert report.pairs_enumerated == 5
+    assert report.findings == []

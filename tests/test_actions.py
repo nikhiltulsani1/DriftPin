@@ -178,7 +178,10 @@ async def test_run_generate_strategy_reports_stage_progress(tmp_path: Path, mock
         "coverage_notes": "",
     }
     provider = mock_provider_factory(
-        [CompletionResult(content=json.dumps(payload), tokens_in=1, tokens_out=1, stop_reason="end_turn")]
+        [
+            CompletionResult(content=json.dumps({"entities": []}), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
+            CompletionResult(content=json.dumps(payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
+        ]
     )
 
     stages: list[str] = []
@@ -214,7 +217,15 @@ async def test_run_generate_strategy_aborts_when_consistency_report_declined(
     )
     _write_registry(tmp_path, [requirement])
     provider = mock_provider_factory(
-        [CompletionResult(content=json.dumps({"verdict": "threshold_mismatch", "explanation": "Zero vs below 1."}), tokens_in=1, tokens_out=1, stop_reason="end_turn")]
+        [
+            CompletionResult(content=json.dumps({"entities": []}), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
+            CompletionResult(
+                content=json.dumps({"verdict": "threshold_mismatch", "explanation": "Zero vs below 1."}),
+                tokens_in=1,
+                tokens_out=1,
+                stop_reason="end_turn",
+            ),
+        ]
     )
 
     with pytest.raises(GenerationAbortedError):
@@ -242,7 +253,10 @@ async def test_run_generate_strategy_writes_json_and_markdown(tmp_path: Path, mo
         "coverage_notes": "",
     }
     provider = mock_provider_factory(
-        [CompletionResult(content=json.dumps(payload), tokens_in=1, tokens_out=1, stop_reason="end_turn")]
+        [
+            CompletionResult(content=json.dumps({"entities": []}), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
+            CompletionResult(content=json.dumps(payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
+        ]
     )
 
     out_dir = tmp_path / "out"
@@ -301,6 +315,7 @@ async def test_run_generate_cases_writes_excel_and_markdown(tmp_path: Path, mock
 
     provider = mock_provider_factory(
         [
+            CompletionResult(content=json.dumps({"entities": []}), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
             CompletionResult(content=json.dumps(strategy_payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
             CompletionResult(content=json.dumps(fill_payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
             CompletionResult(content=json.dumps(review_payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
