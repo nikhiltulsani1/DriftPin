@@ -28,15 +28,19 @@ from driftpin.providers.anthropic_provider import AnthropicProvider
 from driftpin.providers.base import ProviderValidationError
 from driftpin.providers.conformance import ConformanceResult, run_conformance_probe
 from driftpin.providers.groq_provider import GroqProvider
+from driftpin.providers.nvidia_provider import NvidiaProvider
 from driftpin.providers.ollama_provider import OllamaProvider
 
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 ANTHROPIC_API_KEY_SECRET = "anthropic_api_key"
 ANTHROPIC_API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
 GROQ_API_KEY_SECRET = "groq_api_key"
 GROQ_API_KEY_ENV_VAR = "GROQ_API_KEY"
+NVIDIA_API_KEY_SECRET = "nvidia_api_key"
+NVIDIA_API_KEY_ENV_VAR = "NVIDIA_API_KEY"
 
 
 class InitWizardError(Exception):
@@ -78,6 +82,12 @@ async def validate_groq_key(api_key: str, model: str) -> None:
     await provider.validate()
 
 
+async def validate_nvidia_key(api_key: str, model: str) -> None:
+    """Raises ProviderValidationError if the key or model is rejected."""
+    provider = NvidiaProvider(api_key=api_key, model=model)
+    await provider.validate()
+
+
 async def probe_local_model_conformance(base_url: str, model: str) -> ConformanceResult:
     provider = OllamaProvider(base_url=base_url, model=model)
     return await run_conformance_probe(provider)
@@ -102,7 +112,7 @@ def run_init_wizard(project_root: Path, console: Console | None = None) -> None:
 
     provider_choice = Prompt.ask(
         "Which provider will drive Driftpin's agents?",
-        choices=["anthropic", "groq", "local"],
+        choices=["anthropic", "groq", "nvidia", "local"],
         default="anthropic",
     )
 
@@ -110,6 +120,8 @@ def run_init_wizard(project_root: Path, console: Console | None = None) -> None:
         _run_anthropic_setup(project_root, console)
     elif provider_choice == "groq":
         _run_groq_setup(project_root, console)
+    elif provider_choice == "nvidia":
+        _run_nvidia_setup(project_root, console)
     else:
         _run_ollama_setup(project_root, console)
 
@@ -156,6 +168,28 @@ def _run_groq_setup(project_root: Path, console: Console) -> None:
     config = build_config(ProviderKind.GROQ, model=model)
     save_config(project_root, config)
     console.print(f"[green]Configured Groq provider with model '{model}'.[/green]")
+
+
+def _run_nvidia_setup(project_root: Path, console: Console) -> None:
+    api_key = os.environ.get(NVIDIA_API_KEY_ENV_VAR)
+    if not api_key:
+        api_key = Prompt.ask("NVIDIA API key", password=True)
+
+    model = Prompt.ask("Model", default=DEFAULT_NVIDIA_MODEL)
+
+    console.print("Validating NVIDIA credentials...")
+    try:
+        asyncio.run(validate_nvidia_key(api_key, model))
+    except ProviderValidationError as exc:
+        console.print(f"[red]Validation failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+    secrets = SecretStore(driftpin_dir(project_root))
+    secrets.set(NVIDIA_API_KEY_SECRET, api_key)
+
+    config = build_config(ProviderKind.NVIDIA, model=model)
+    save_config(project_root, config)
+    console.print(f"[green]Configured NVIDIA provider with model '{model}'.[/green]")
 
 
 def _run_ollama_setup(project_root: Path, console: Console) -> None:

@@ -14,7 +14,7 @@ Most "AI writes tests" tools optimize for volume: generate a pile of Playwright 
 
 ## Status
 
-Release 1 is code-complete and has run for real: ingestion, generation, and rendering have all executed end-to-end against a human-authored PRD on Anthropic-compatible (Groq) and local (Ollama) providers, with ledger evidence for every run. What's still open is the actual gate itself — a human scoring the generated test cases against hand-written expected coverage (precision/recall), which is deliberately reserved for a human, not something this tool scores on its own behalf. An independent fresh-context audit also flagged a real schema gap (several output fields could pass validation while empty or templated) that's since been fixed with `min_length` constraints. See [EVALS.md](EVALS.md) for what's scored and what's still pending, and [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) for the reasoning behind the architecture below.
+Release 1's pipeline is code-complete and has run for real end-to-end against a human-authored PRD, on Groq, NVIDIA NIM, and local Ollama, with ledger evidence for every run. A human-executed gate review found real problems — placeholder-quality test steps, a test case that directly contradicted its own requirement, and a coverage ceiling that held at ~67% across three provider/token configurations regardless of budget or prompt wording. All three are now fixed: generation moved from one call enumerating-and-filling a full suite to a two-stage enumerate-then-fill pipeline with code-enforced completeness (see `DESIGN_DECISIONS.md`), and a rerun against all three providers hit 12/12 (100%) requirement coverage on every one, including the smallest local model. What's still outstanding is the human precision/recall scoring itself against the golden set's hand-written expected cases — deliberately reserved for a human, not something this tool scores on its own behalf. See [EVALS.md](EVALS.md) for the full scoring detail and [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) for the reasoning behind the architecture below.
 
 ## Architecture
 
@@ -43,7 +43,7 @@ flowchart LR
     end
 
     Registry --> Architect
-    Provider[LLMProvider\nAnthropic / Groq / Ollama] -.-> Architect
+    Provider[LLMProvider\nAnthropic / Groq / NVIDIA / Ollama] -.-> Architect
     Provider -.-> Tester
     Provider -.-> Reviewer
     Architect -.-> Ledger[(Run Ledger)]
@@ -53,7 +53,7 @@ flowchart LR
 
 Key pieces:
 
-- **Provider layer** (`providers/`) — one `LLMProvider` interface; Anthropic, Groq, and Ollama implemented, OpenAI planned for Release 3. A new provider is one new file.
+- **Provider layer** (`providers/`) — one `LLMProvider` interface; Anthropic, Groq, NVIDIA NIM, and Ollama implemented, OpenAI planned for Release 3. A new provider is one new file.
 - **Requirement registry** (`ingestion/registry.py`) — the system's central data structure. IDs are content-addressed (hash of source doc + verbatim requirement text), never assigned by the extracting LLM, so re-ingesting an unchanged PRD produces identical IDs regardless of extraction order.
 - **Extraction guard rail** (`ingestion/extractor.py`) — every candidate requirement's source span is verified as a verbatim substring of the actual document after extraction. A quote that can't be found gets demoted to a flagged ambiguity, never trusted into the registry.
 - **Agents as config** (`agents/*.yaml` + `prompts/*.md.j2`) — test-architect, functional-tester, and reviewer are declared, not hardcoded; one generic runtime (`agents/runtime.py`) executes all three against their schema.
@@ -65,7 +65,7 @@ Key pieces:
 
 | Command | What it does |
 |---|---|
-| `driftpin init` | Configure the provider (Anthropic, Groq, or a local Ollama model) for this project. |
+| `driftpin init` | Configure the provider (Anthropic, Groq, NVIDIA NIM, or a local Ollama model) for this project. |
 | `driftpin ingest --docs <path>...` | Parse documents, extract requirements, merge into the registry. |
 | `driftpin chat` | Interactive session — `/ingest`, `/requirements`, `/strategy`, `/cases`, `/status`. |
 | `driftpin generate strategy --out <dir>` | Generate scenarios from the registry, no cases yet. |
@@ -78,7 +78,7 @@ pip install -e ".[dev]"
 driftpin init
 ```
 
-`init` walks through provider selection, validates the connection (a real API call for Anthropic/Groq, a reachability + conformance probe for Ollama), and for local models runs a structured-output conformance probe before trusting it with schema-first agents.
+`init` walks through provider selection, validates the connection (a real API call for Anthropic/Groq/NVIDIA, a reachability + conformance probe for Ollama), and for local models runs a structured-output conformance probe before trusting it with schema-first agents.
 
 ## Docker
 

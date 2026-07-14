@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from driftpin.agents.loader import AgentDefinition, resolve_output_schema
 from driftpin.ledger.ledger import RunLedger
 from driftpin.paths import find_repo_dir
-from driftpin.providers.base import CompletionResult, LLMProvider, Message
+from driftpin.providers.base import CompletionResult, LLMProvider, Message, ServerExhaustedError
 from driftpin.providers.structured import complete_structured
 
 _TRIGGER_MESSAGE = "Produce the structured output now, following the schema and instructions above."
@@ -50,11 +50,19 @@ async def run_agent(
                 metadata={"attempt": attempt, "stop_reason": result.stop_reason},
             )
 
-    parsed, _attempts = await complete_structured(
-        provider,
-        messages=[Message(role="user", content=_TRIGGER_MESSAGE)],
-        system=system_prompt,
-        response_model=response_model,
-        on_attempt=_on_attempt,
-    )
+    try:
+        parsed, _attempts = await complete_structured(
+            provider,
+            messages=[Message(role="user", content=_TRIGGER_MESSAGE)],
+            system=system_prompt,
+            response_model=response_model,
+            on_attempt=_on_attempt,
+        )
+    except ServerExhaustedError as exc:
+        if ledger is not None:
+            ledger.record_assumption(
+                heading=f"{definition.name}: provider capacity exhausted (pattern '{exc.matched_pattern}')",
+                detail=str(exc),
+            )
+        raise
     return parsed

@@ -17,6 +17,7 @@ class ProviderKind(StrEnum):
     OLLAMA = "ollama"
     OPENAI = "openai"
     GROQ = "groq"
+    NVIDIA = "nvidia"
 
 
 class ProviderConfig(BaseModel):

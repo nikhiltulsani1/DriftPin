@@ -20,6 +20,7 @@ from rich.console import Console
 from rich.prompt import Confirm
 from rich.table import Table
 
+from driftpin.agents.orchestrator import TooManyScenariosError
 from driftpin.cli.actions import (
     DocumentNotFoundError,
     EmptyRegistryError,
@@ -31,7 +32,7 @@ from driftpin.cli.actions import (
 from driftpin.ingestion.parsers import UnsupportedDocumentFormatError
 from driftpin.providers.base import LLMProvider
 from driftpin.providers.factory import ProviderNotConfiguredError, build_configured_provider
-from driftpin.render.labels import build_requirement_labels, labels_for
+from driftpin.render.labels import build_requirement_labels, labels_for, substitute_labels_in_text
 
 _HELP_TEXT = """[bold]Commands[/bold]
   /help                      Show this message.
@@ -180,7 +181,9 @@ def _handle_strategy(provider: LLMProvider, project_root: Path, console: Console
             status.update(f"Running {name}...")
 
         try:
-            outcome = asyncio.run(run_generate_strategy(provider, project_root, on_stage=on_stage))
+            outcome = asyncio.run(
+                run_generate_strategy(provider, project_root, _DEFAULT_OUT_DIR, on_stage=on_stage)
+            )
         except EmptyRegistryError as exc:
             console.print(f"[red]{exc}[/red]")
             return
@@ -194,12 +197,14 @@ def _handle_strategy(provider: LLMProvider, project_root: Path, console: Console
     table.add_column("Execution")
     for scenario in strategy.scenarios:
         table.add_row(
-            f"{scenario.scenario_id}: {scenario.title}",
+            f"{scenario.scenario_id}: {substitute_labels_in_text(scenario.title, labels)}",
             ", ".join(labels_for(scenario.requirement_ids, labels)),
             scenario.owning_agent.value,
             scenario.execution_recommendation.value,
         )
     console.print(table)
+    console.print(f"Strategy saved to {outcome.strategy_path}")
+    console.print(f"Markdown report saved to {outcome.markdown_path}")
     console.print(f"Ledger: {outcome.ledger.ledger_path}")
 
 
@@ -215,6 +220,13 @@ def _handle_cases(provider: LLMProvider, project_root: Path, console: Console) -
     ):
         return
 
+    def on_scenario_count_check(scenario_count: int) -> bool:
+        console.print(
+            f"[yellow]This PRD produced {scenario_count} scenarios, above the 100-scenario "
+            "guard — it may be too large for a single run; consider splitting it by module.[/yellow]"
+        )
+        return Confirm.ask("Proceed with the full fill stage anyway?", default=False)
+
     with console.status("Starting...") as status:
 
         def on_stage(name: str) -> None:
@@ -222,9 +234,18 @@ def _handle_cases(provider: LLMProvider, project_root: Path, console: Console) -
 
         try:
             outcome = asyncio.run(
-                run_generate_cases(provider, project_root, _DEFAULT_OUT_DIR, on_stage=on_stage)
+                run_generate_cases(
+                    provider,
+                    project_root,
+                    _DEFAULT_OUT_DIR,
+                    on_stage=on_stage,
+                    on_scenario_count_check=on_scenario_count_check,
+                )
             )
         except EmptyRegistryError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return
+        except TooManyScenariosError as exc:
             console.print(f"[red]{exc}[/red]")
             return
 

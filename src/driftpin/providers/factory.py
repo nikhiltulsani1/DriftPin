@@ -9,12 +9,15 @@ from driftpin.cli.init_wizard import (
     ANTHROPIC_API_KEY_SECRET,
     GROQ_API_KEY_ENV_VAR,
     GROQ_API_KEY_SECRET,
+    NVIDIA_API_KEY_ENV_VAR,
+    NVIDIA_API_KEY_SECRET,
 )
 from driftpin.config.secrets import SecretStore
 from driftpin.config.settings import ProviderKind, driftpin_dir, load_config
 from driftpin.providers.anthropic_provider import AnthropicProvider
 from driftpin.providers.base import LLMProvider
 from driftpin.providers.groq_provider import GroqProvider
+from driftpin.providers.nvidia_provider import NvidiaProvider
 from driftpin.providers.ollama_provider import OllamaProvider
 
 
@@ -48,6 +51,16 @@ def build_configured_provider(project_root: Path) -> LLMProvider:
                 f"{GROQ_API_KEY_ENV_VAR}."
             )
         return GroqProvider(api_key=api_key, model=config.provider.model)
+
+    if config.provider.kind == ProviderKind.NVIDIA:
+        secrets = SecretStore(driftpin_dir(project_root))
+        api_key = secrets.get(NVIDIA_API_KEY_SECRET, env_var=NVIDIA_API_KEY_ENV_VAR)
+        if not api_key:
+            raise ProviderNotConfiguredError(
+                "No NVIDIA API key found. Run `driftpin init` again or set "
+                f"{NVIDIA_API_KEY_ENV_VAR}."
+            )
+        return NvidiaProvider(api_key=api_key, model=config.provider.model)
 
     if config.provider.kind == ProviderKind.OLLAMA:
         base_url = config.provider.base_url

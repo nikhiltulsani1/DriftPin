@@ -1,0 +1,6 @@
+name: consistency-checker
+model_binding: null
+system_prompt: consistency_checker.md.j2
+tools: []
+output_schema: driftpin.schemas.consistency.ConsistencyCheckResult
+max_iterations: 1

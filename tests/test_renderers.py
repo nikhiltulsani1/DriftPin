@@ -7,7 +7,7 @@ import openpyxl
 from driftpin.agents.orchestrator import PipelineResult
 from driftpin.render.excel import save_excel_workbook
 from driftpin.render.headers import build_header
-from driftpin.render.markdown import render_markdown_report
+from driftpin.render.markdown import render_markdown_report, render_strategy_markdown
 from driftpin.schemas.requirements import Requirement, RiskTier
 from driftpin.schemas.review import FindingSeverity, ReviewerFinding, ReviewReport
 from driftpin.schemas.strategy import ExecutionRecommendation, OwningAgent, Scenario
@@ -127,6 +127,70 @@ def test_render_markdown_report_substitutes_ids_in_review_summary_prose() -> Non
     assert "R-abc12345" not in report
 
 
+def test_render_strategy_markdown_contains_header_and_scenarios_only() -> None:
+    header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
+    strategy = _pipeline_result().strategy
+
+    report = render_strategy_markdown(strategy, header)
+
+    assert "# Driftpin Test Report" in report
+    assert "Source document(s): prd.md" in report
+    assert "## Scenarios" in report
+    assert "S-1" in report
+    assert "Req-1" in report
+    assert "R-abc12345" not in report
+    assert "## Traceability Matrix" not in report
+    assert "## Test Cases" not in report
+    assert "## Review" not in report
+
+
+def test_render_markdown_report_shows_generation_failures_when_present() -> None:
+    header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
+    result = _pipeline_result()
+    result = result.model_copy(update={"failed_scenario_ids": ["S-1"]})
+
+    report = render_markdown_report(result, header)
+
+    assert "## Generation Failures" in report
+    assert "GENERATION_FAILED" in report
+    assert "S-1" in report.split("## Generation Failures")[1].split("## Traceability Matrix")[0]
+
+
+def test_render_markdown_report_omits_generation_failures_section_when_absent() -> None:
+    header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
+
+    report = render_markdown_report(_pipeline_result(), header)
+
+    assert "## Generation Failures" not in report
+
+
+def test_render_markdown_report_shows_case_assumptions_when_present() -> None:
+    header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
+    result = _pipeline_result()
+    case_with_assumption = result.suite.cases[0].model_copy(
+        update={"assumptions": ["ASSUMED: rate limit is 5 attempts — not specified in R-abc12345"]}
+    )
+    result = result.model_copy(update={"suite": result.suite.model_copy(update={"cases": [case_with_assumption]})})
+
+    report = render_markdown_report(result, header)
+
+    assert "Assumptions:" in report
+    assert "rate limit is 5 attempts" in report
+
+
+def test_render_markdown_report_shows_requirement_quote_on_findings() -> None:
+    header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
+    result = _pipeline_result()
+    finding_with_quote = result.review.findings[0].model_copy(
+        update={"requirement_quote": "never silently dropped"}
+    )
+    result = result.model_copy(update={"review": result.review.model_copy(update={"findings": [finding_with_quote]})})
+
+    report = render_markdown_report(result, header)
+
+    assert 'quote: "never silently dropped"' in report
+
+
 def test_save_excel_workbook_writes_expected_sheets(tmp_path: Path) -> None:
     header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
     output_path = tmp_path / "report.xlsx"
@@ -143,3 +207,52 @@ def test_save_excel_workbook_writes_expected_sheets(tmp_path: Path) -> None:
 
     cases_sheet = workbook["Test Cases"]
     assert cases_sheet["A2"].value == "TC-1"
+
+
+def test_save_excel_workbook_adds_generation_failures_sheet_when_present(tmp_path: Path) -> None:
+    header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
+    output_path = tmp_path / "report.xlsx"
+    result = _pipeline_result().model_copy(update={"failed_scenario_ids": ["S-1"]})
+
+    save_excel_workbook(result, header, output_path)
+
+    workbook = openpyxl.load_workbook(str(output_path))
+    assert "Generation Failures" in workbook.sheetnames
+
+    failures_sheet = workbook["Generation Failures"]
+    assert failures_sheet["A2"].value == "S-1"
+    assert failures_sheet["C2"].value == "GENERATION_FAILED — human attention required"
+
+
+def test_save_excel_workbook_writes_case_assumptions_column(tmp_path: Path) -> None:
+    header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
+    output_path = tmp_path / "report.xlsx"
+    result = _pipeline_result()
+    case_with_assumption = result.suite.cases[0].model_copy(
+        update={"assumptions": ["ASSUMED: rate limit is 5 attempts — not specified in R-abc12345"]}
+    )
+    result = result.model_copy(update={"suite": result.suite.model_copy(update={"cases": [case_with_assumption]})})
+
+    save_excel_workbook(result, header, output_path)
+
+    workbook = openpyxl.load_workbook(str(output_path))
+    cases_sheet = workbook["Test Cases"]
+    assert cases_sheet["I1"].value == "Assumptions"
+    assert "rate limit is 5 attempts" in cases_sheet["I2"].value
+
+
+def test_save_excel_workbook_writes_requirement_quote_column(tmp_path: Path) -> None:
+    header = build_header(run_id="run-1", requirements=[_requirement()], registry_version=1)
+    output_path = tmp_path / "report.xlsx"
+    result = _pipeline_result()
+    finding_with_quote = result.review.findings[0].model_copy(
+        update={"requirement_quote": "never silently dropped"}
+    )
+    result = result.model_copy(update={"review": result.review.model_copy(update={"findings": [finding_with_quote]})})
+
+    save_excel_workbook(result, header, output_path)
+
+    workbook = openpyxl.load_workbook(str(output_path))
+    review_sheet = workbook["Review"]
+    assert review_sheet["E4"].value == "Requirement Quote"
+    assert review_sheet["E5"].value == "never silently dropped"

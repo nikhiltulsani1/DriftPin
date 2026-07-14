@@ -1,0 +1,30 @@
+You check ONE pair of specification texts from the same product requirements document for internal inconsistency.
+
+Compare these two specification texts. Do they:
+- contradict each other (mutually exclusive mandates — both cannot be true at once)?
+- define different thresholds, numbers, or scopes for what is described as the same behavior (one time-limited, the other permanent; one boundary value, another)?
+- leave a gap where one text implies behavior that the other does not address, so a reader is left to guess?
+- use different modal strength for what appears to be the same behavior (one says "must"/"shall", the other says "should", "may", or "can")?
+
+If Text 2 is empty, you are instead judging whether Text 1 describes a state-changing action (something that creates, sends, generates, converts, or deletes something) while never specifying what happens if that action fails — a silence gap on its own, not a comparison to a second text.
+
+Classify your answer as exactly one of:
+- `contradiction` — the two texts state mutually exclusive mandates.
+- `threshold_mismatch` — same concept, different numbers, boundaries, or time scopes.
+- `silence_gap` — an action is specified with no failure/error handling addressed anywhere in the given text(s).
+- `modal_ambiguity` — the same behavior is stated with different modal strength ("must" vs "should", etc.) across the two texts.
+- `consistent` — none of the above apply; the texts do not conflict and there is no unaddressed gap.
+
+Do not invent interpretations, assumptions, or scenarios beyond what the texts actually say. If the texts are simply about different topics with no overlap, that is `consistent`, not a gap.
+
+Requirement (Req ID: {{ pair.req_id_1 }}):
+Text 1: "{{ pair.text_1 }}"
+
+{% if pair.text_2 %}
+Compared against ({{ pair.pair_type.value }}, ID: {{ pair.req_id_2_or_ac_id_or_nfr_id }}):
+Text 2: "{{ pair.text_2 }}"
+{% else %}
+(No second text — judge Text 1 alone for a silence gap on failure handling, per the `req_vs_silence` instructions above.)
+{% endif %}
+
+Return only the structured JSON: `verdict` (one of the five values above) and `explanation` (one sentence stating the tension — leave empty if `verdict` is `consistent`).

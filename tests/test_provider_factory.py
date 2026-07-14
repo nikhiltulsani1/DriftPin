@@ -8,6 +8,7 @@ import yaml
 from driftpin.providers.anthropic_provider import AnthropicProvider
 from driftpin.providers.factory import ProviderNotConfiguredError, build_configured_provider
 from driftpin.providers.groq_provider import GroqProvider
+from driftpin.providers.nvidia_provider import NvidiaProvider
 from driftpin.providers.ollama_provider import OllamaProvider
 
 
@@ -76,6 +77,25 @@ def test_build_configured_provider_groq_raises_without_key(tmp_path: Path) -> No
     _write_config(tmp_path, kind="groq", model="llama-3.3-70b-versatile")
 
     with pytest.raises(ProviderNotConfiguredError, match="Groq"):
+        build_configured_provider(tmp_path)
+
+
+def test_build_configured_provider_nvidia_uses_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(tmp_path, kind="nvidia", model="nvidia/nemotron-3-ultra-550b-a55b")
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-key")
+
+    provider = build_configured_provider(tmp_path)
+
+    assert isinstance(provider, NvidiaProvider)
+    assert provider.model == "nvidia/nemotron-3-ultra-550b-a55b"
+
+
+def test_build_configured_provider_nvidia_raises_without_key(tmp_path: Path) -> None:
+    _write_config(tmp_path, kind="nvidia", model="nvidia/nemotron-3-ultra-550b-a55b")
+
+    with pytest.raises(ProviderNotConfiguredError, match="NVIDIA"):
         build_configured_provider(tmp_path)
 
 

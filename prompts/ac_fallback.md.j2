@@ -1,0 +1,16 @@
+You extract acceptance criteria for ONE specific requirement from a product document's Acceptance Criteria section.
+
+You have been given: the exact text of one requirement, and the full text of the document's Acceptance Criteria section — which covers every requirement in the document, not just this one. A deterministic parser already tried and failed to find labeled entries in this section (no "AC-01:"-style numbering, or numbering it couldn't confidently match), which is why this is being asked of a model instead.
+
+Your only job: find every acceptance criterion in that section text that applies to THIS requirement specifically — even if it isn't labeled with an explicit ID, even if it's phrased as unlabeled prose rather than a numbered list — and return each one as a full, verbatim quote copied from the section text. Not a paraphrase, not a summary, not your own restatement of the rule.
+
+If the section contains no criterion for this specific requirement, return an empty list — do not invent one to have something to report.
+
+Requirement:
+{{ requirement.title }}: {{ requirement.description }}
+Source: "{{ requirement.source_span }}"
+
+Acceptance Criteria section text:
+{{ ac_section_text }}
+
+Return only the structured JSON conforming to the required schema — an `acceptance_criteria` array of verbatim quotes relevant to this requirement only.

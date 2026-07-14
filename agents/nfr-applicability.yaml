@@ -1,0 +1,6 @@
+name: nfr-applicability
+model_binding: null
+system_prompt: nfr_applicability.md.j2
+tools: []
+output_schema: driftpin.schemas.consistency.NfrApplicabilityResult
+max_iterations: 1

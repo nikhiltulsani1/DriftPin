@@ -1,0 +1,16 @@
+You judge whether ONE non-functional requirement (NFR) plausibly governs the failure modes of ONE specific functional requirement, both from the same product requirements document.
+
+A GLOBAL NFR applies broadly across the whole document by default, but "applies broadly" does not mean "governs every requirement's failure behavior." A sync-retry policy governs sync-related actions; it does not automatically cover an unrelated action like generating a monthly summary or validating a budget threshold, even though both are described in the same document and both could technically "fail."
+
+Requirement (Req ID: {{ requirement.requirement_id }}):
+{{ requirement.title }}: {{ requirement.description }}
+{% for ac in requirement.acceptance_criteria %}
+AC: "{{ ac.text }}"
+{% endfor %}
+
+Candidate NFR (ID: {{ nfr.nfr_id }}):
+"{{ nfr.text }}"
+
+Question: if this requirement's own action failed, would this NFR's text actually describe what happens? Answer `true` only if the NFR's subject matter (the specific action, resource, or operation it names) matches the requirement's own action -- not merely because both requirement and NFR appear in the same document, or because both are broadly about "reliability" or "errors" in the abstract.
+
+Return only the structured JSON: `applicable` (true or false) and `reason` (one sentence explaining the judgment).

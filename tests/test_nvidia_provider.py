@@ -1,4 +1,4 @@
-"""GroqProvider tests use httpx.MockTransport so nothing touches a real network."""
+"""NvidiaProvider tests use httpx.MockTransport so nothing touches a real network."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from driftpin.providers.base import (
     ServerExhaustedError,
     ToolDefinition,
 )
-from driftpin.providers.groq_provider import GroqProvider, _parse_retry_after_seconds
+from driftpin.providers.nvidia_provider import NvidiaProvider
 
 
 async def _no_op_sleep(_seconds: float) -> None:
@@ -56,9 +56,9 @@ async def test_validate_succeeds_on_2xx(monkeypatch: pytest.MonkeyPatch) -> None
         return _chat_response(content="hi")
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    provider = GroqProvider(api_key="test-key", model="llama-3.3-70b-versatile")
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
 
     await provider.validate()  # should not raise
 
@@ -69,9 +69,9 @@ async def test_validate_raises_on_http_error(monkeypatch: pytest.MonkeyPatch) ->
         return httpx.Response(401, json={"error": "invalid api key"})
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    provider = GroqProvider(api_key="bad-key", model="llama-3.3-70b-versatile")
+    provider = NvidiaProvider(api_key="bad-key", model="nvidia/nemotron-3-ultra-550b-a55b")
 
     with pytest.raises(ProviderValidationError):
         await provider.validate()
@@ -83,9 +83,9 @@ async def test_complete_parses_plain_text_response(monkeypatch: pytest.MonkeyPat
         return _chat_response(content="The answer is 42.")
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    provider = GroqProvider(api_key="test-key", model="llama-3.3-70b-versatile")
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
 
     result = await provider.complete([Message(role="user", content="what is the answer?")], system="sys")
 
@@ -104,9 +104,9 @@ async def test_complete_with_tools_sends_tool_definitions(monkeypatch: pytest.Mo
         return _chat_response(content="ok")
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    provider = GroqProvider(api_key="test-key", model="llama-3.3-70b-versatile")
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
     tools = [ToolDefinition(name="lookup", description="Looks something up.", input_schema={"type": "object"})]
 
     await provider.complete([Message(role="user", content="go")], system="sys", tools=tools)
@@ -136,9 +136,9 @@ async def test_complete_structured_forces_tool_choice_and_parses_arguments(
         )
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    provider = GroqProvider(api_key="test-key", model="llama-3.3-70b-versatile")
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
 
     result = await provider.complete_structured(
         [Message(role="user", content="go")],
@@ -150,66 +150,70 @@ async def test_complete_structured_forces_tool_choice_and_parses_arguments(
     assert captured_payloads[0]["tool_choice"]["function"]["name"] == "emit_structured_output"
 
 
-def test_parse_retry_after_seconds_extracts_value_from_message() -> None:
-    assert _parse_retry_after_seconds("Please try again in 21.46s.") == 21.46
-
-
-def test_parse_retry_after_seconds_falls_back_when_unparseable() -> None:
-    assert _parse_retry_after_seconds("no timing info here") == 10.0
-
-
 @pytest.mark.asyncio
-async def test_complete_structured_returns_failed_generation_on_tool_use_failed(
+async def test_complete_structured_retries_on_capacity_error_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    call_count = 0
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            400,
-            json={
-                "error": {
-                    "message": "Failed to call a function. Please adjust your prompt.",
-                    "type": "invalid_request_error",
-                    "code": "tool_use_failed",
-                    "failed_generation": '<function=emit_structured_output>{"value": "broken"',
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(
+                503,
+                json={"error": {"message": "ResourceExhausted: Worker local total request limit reached"}},
+            )
+        return _chat_response(
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "emit_structured_output",
+                        "arguments": json.dumps({"value": "ok"}),
+                    },
                 }
-            },
+            ]
         )
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    provider = GroqProvider(api_key="test-key", model="llama-3.1-8b-instant")
+    monkeypatch.setattr("driftpin.providers.nvidia_provider.asyncio.sleep", _no_op_sleep)
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
 
     result = await provider.complete_structured(
-        [Message(role="user", content="go")],
-        system="sys",
-        json_schema={"type": "object"},
+        [Message(role="user", content="go")], system="sys", json_schema={"type": "object"}
     )
 
-    assert result.stop_reason == "tool_use_failed"
-    assert "emit_structured_output" in result.content
+    assert call_count == 2
+    assert json.loads(result.content) == {"value": "ok"}
 
 
 @pytest.mark.asyncio
 async def test_complete_structured_raises_payload_too_heavy_after_exhausting_gateway_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A 502/503/504 that repeats on an identical payload is capped at
-    2 retries (3 total attempts) before raising `PayloadTooHeavyError`
-    rather than a further identical retry — same reasoning as NVIDIA's
-    equivalent, applied consistently across providers."""
+    """Fixture J, second half (guard against over-broadening): a 503/504
+    whose body does NOT match any server-exhaustion pattern still follows
+    the existing path — capped at `_MAX_GATEWAY_RETRIES` (2), 3 total
+    attempts, then `PayloadTooHeavyError` rather than blind-retrying a 4th
+    time. Verified live: NVIDIA's reviewer call returned 504 three attempts
+    in a row on the same payload shape with an unrelated/empty body, not a
+    transient blip and not a capacity-exhaustion signal either."""
     call_count = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal call_count
         call_count += 1
-        return httpx.Response(504, json={"error": {"message": "gateway timeout"}})
+        return httpx.Response(504, content=b"")
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    monkeypatch.setattr("driftpin.providers.groq_provider.asyncio.sleep", _no_op_sleep)
-    provider = GroqProvider(api_key="test-key", model="llama-3.3-70b-versatile")
+    monkeypatch.setattr("driftpin.providers.nvidia_provider.asyncio.sleep", _no_op_sleep)
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
 
     with pytest.raises(PayloadTooHeavyError):
         await provider.complete_structured(
@@ -222,11 +226,12 @@ async def test_complete_structured_raises_payload_too_heavy_after_exhausting_gat
 async def test_complete_structured_raises_server_exhausted_not_payload_too_heavy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Fixture J, applied to Groq for consistency across providers: a 503
-    body naming server-side capacity exhaustion classifies as
-    `ServerExhaustedError`, never `PayloadTooHeavyError` — splitting a
-    request in half and firing two into an exhausted worker pool makes the
-    exhaustion worse, not better."""
+    """Fixture J, first half: a 503 whose body names server-side capacity
+    exhaustion — live evidence: "ResourceExhausted: Worker local total
+    request limit reached (32/32)" — must classify as `ServerExhaustedError`,
+    never `PayloadTooHeavyError`. The wrong classification would trigger
+    splitting the request smaller and firing more calls into an already-
+    exhausted pool, making the exhaustion worse, not better."""
     call_count = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -238,10 +243,10 @@ async def test_complete_structured_raises_server_exhausted_not_payload_too_heavy
         )
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    monkeypatch.setattr("driftpin.providers.groq_provider.asyncio.sleep", _no_op_sleep)
-    provider = GroqProvider(api_key="test-key", model="llama-3.3-70b-versatile")
+    monkeypatch.setattr("driftpin.providers.nvidia_provider.asyncio.sleep", _no_op_sleep)
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
 
     with pytest.raises(ServerExhaustedError) as exc_info:
         await provider.complete_structured(
@@ -249,7 +254,24 @@ async def test_complete_structured_raises_server_exhausted_not_payload_too_heavy
         )
 
     assert exc_info.value.matched_pattern in ("resourceexhausted", "worker", "request limit")
+    # 1 initial attempt + 4 retries = 5 total, per _MAX_SERVER_EXHAUSTED_RETRIES.
     assert call_count == 5
+
+
+@pytest.mark.asyncio
+async def test_complete_structured_raises_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": {"message": "internal error"}})
+
+    monkeypatch.setattr(
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
+    )
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await provider.complete_structured(
+            [Message(role="user", content="go")], system="sys", json_schema={"type": "object"}
+        )
 
 
 @pytest.mark.asyncio
@@ -258,9 +280,9 @@ async def test_complete_structured_raises_request_too_large_on_413(monkeypatch: 
         return httpx.Response(413, json={"error": {"message": "payload too large"}})
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    provider = GroqProvider(api_key="test-key", model="llama-3.3-70b-versatile")
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
 
     with pytest.raises(RequestTooLargeError):
         await provider.complete_structured(
@@ -278,81 +300,14 @@ async def test_complete_structured_raises_request_too_large_on_context_length_me
         )
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    provider = GroqProvider(api_key="test-key", model="llama-3.3-70b-versatile")
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
 
     with pytest.raises(RequestTooLargeError):
         await provider.complete_structured(
             [Message(role="user", content="go")], system="sys", json_schema={"type": "object"}
         )
-
-
-@pytest.mark.asyncio
-async def test_complete_structured_retries_on_rate_limit_then_succeeds(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    call_count = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return httpx.Response(
-                429,
-                json={"error": {"message": "Rate limit reached. Please try again in 0.01s."}},
-            )
-        return _chat_response(
-            tool_calls=[
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "emit_structured_output",
-                        "arguments": json.dumps({"value": "ok"}),
-                    },
-                }
-            ]
-        )
-
-    monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
-    )
-    provider = GroqProvider(api_key="test-key", model="llama-3.1-8b-instant")
-
-    result = await provider.complete_structured(
-        [Message(role="user", content="go")], system="sys", json_schema={"type": "object"}
-    )
-
-    assert call_count == 2
-    assert json.loads(result.content) == {"value": "ok"}
-
-
-@pytest.mark.asyncio
-async def test_complete_structured_raises_after_exhausting_rate_limit_retries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    call_count = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal call_count
-        call_count += 1
-        return httpx.Response(
-            429,
-            json={"error": {"message": "Rate limit reached. Please try again in 0.01s."}},
-        )
-
-    monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
-    )
-    provider = GroqProvider(api_key="test-key", model="llama-3.1-8b-instant")
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await provider.complete_structured(
-            [Message(role="user", content="go")], system="sys", json_schema={"type": "object"}
-        )
-
-    assert call_count == 4  # initial attempt + 3 retries
 
 
 @pytest.mark.asyncio
@@ -370,9 +325,9 @@ async def test_stream_yields_text_deltas_then_final_result(monkeypatch: pytest.M
         return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
 
     monkeypatch.setattr(
-        "driftpin.providers.groq_provider.httpx.AsyncClient", _client_with_transport(handler)
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
     )
-    provider = GroqProvider(api_key="test-key", model="llama-3.3-70b-versatile")
+    provider = NvidiaProvider(api_key="test-key", model="nvidia/nemotron-3-ultra-550b-a55b")
 
     chunks = [chunk async for chunk in provider.stream([Message(role="user", content="hi")], system="sys")]
 

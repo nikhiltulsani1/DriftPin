@@ -16,6 +16,7 @@ from driftpin.render.labels import (
     labels_for,
     substitute_labels_in_text,
 )
+from driftpin.schemas.strategy import Scenario, TestStrategy
 
 
 def _header_section(header: ArtifactHeader) -> str:
@@ -29,6 +30,31 @@ def _header_section(header: ArtifactHeader) -> str:
         f"- Source document hash (for verification): {', '.join(header.source_doc_hashes) or '(none)'}",
         "",
     ]
+    return "\n".join(lines)
+
+
+def _generation_failures_section(result: PipelineResult, labels: dict[str, str]) -> str:
+    """Only produces content when a scenario's fill call came back empty on
+    every retry — surfaced prominently, right after the header, rather than
+    left to look like an ordinary zero-coverage row in the traceability
+    matrix below. A silent zero and a `GENERATION_FAILED` scenario need to
+    read differently to a human scoring the report."""
+    if not result.failed_scenario_ids:
+        return ""
+
+    scenarios_by_id = {s.scenario_id: s for s in result.strategy.scenarios}
+    lines = [
+        "## Generation Failures",
+        "",
+        "The following scenarios could not be filled with test cases after retries "
+        "and require human attention — see `ASSUMPTIONS.md` for this run.",
+        "",
+    ]
+    for scenario_id in result.failed_scenario_ids:
+        scenario = scenarios_by_id.get(scenario_id)
+        title = substitute_labels_in_text(scenario.title, labels) if scenario else "(unknown scenario)"
+        lines.append(f"- **GENERATION_FAILED** — {scenario_id}: {title}")
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -49,16 +75,16 @@ def _traceability_section(result: PipelineResult, labels: dict[str, str]) -> str
     return "\n".join(lines)
 
 
-def _scenarios_section(result: PipelineResult, labels: dict[str, str]) -> str:
+def _scenarios_section(scenarios: list[Scenario], labels: dict[str, str]) -> str:
     lines = ["## Scenarios", ""]
-    for scenario in result.strategy.scenarios:
-        lines.append(f"### {scenario.scenario_id}: {scenario.title}")
+    for scenario in scenarios:
+        lines.append(f"### {scenario.scenario_id}: {substitute_labels_in_text(scenario.title, labels)}")
         lines.append(f"- Requirements: {', '.join(labels_for(scenario.requirement_ids, labels))}")
         lines.append(f"- Owning agent: {scenario.owning_agent.value}")
         lines.append(f"- Risk tier: {scenario.risk_tier.value}")
         lines.append(
             f"- Execution recommendation: {scenario.execution_recommendation.value} "
-            f"— {scenario.recommendation_justification}"
+            f"— {substitute_labels_in_text(scenario.recommendation_justification, labels)}"
         )
         lines.append("")
     return "\n".join(lines)
@@ -67,13 +93,19 @@ def _scenarios_section(result: PipelineResult, labels: dict[str, str]) -> str:
 def _test_cases_section(result: PipelineResult, labels: dict[str, str]) -> str:
     lines = ["## Test Cases", ""]
     for case in result.suite.cases:
-        lines.append(f"### {case.case_id}: {case.title}")
+        lines.append(f"### {case.case_id}: {substitute_labels_in_text(case.title, labels)}")
         lines.append(f"- Scenario: {case.scenario_id}")
         lines.append(f"- Requirements: {', '.join(labels_for(case.requirement_ids, labels))}")
         if case.preconditions:
-            lines.append(f"- Preconditions: {case.preconditions}")
+            lines.append(f"- Preconditions: {substitute_labels_in_text(case.preconditions, labels)}")
         for step in case.steps:
-            lines.append(f"{step.step_number}. {step.action} → {step.expected_result}")
+            action = substitute_labels_in_text(step.action, labels)
+            expected = substitute_labels_in_text(step.expected_result, labels)
+            lines.append(f"{step.step_number}. {action} → {expected}")
+        if case.assumptions:
+            lines.append("- Assumptions:")
+            for assumption in case.assumptions:
+                lines.append(f"  - {substitute_labels_in_text(assumption, labels)}")
         lines.append("")
     return "\n".join(lines)
 
@@ -95,9 +127,15 @@ def _review_section(result: PipelineResult, labels: dict[str, str]) -> str:
                 if finding.requirement_ids
                 else "(none)"
             )
+            description = substitute_labels_in_text(finding.description, labels)
+            quote_suffix = (
+                f' — quote: "{substitute_labels_in_text(finding.requirement_quote, labels)}"'
+                if finding.requirement_quote
+                else ""
+            )
             lines.append(
-                f"- **[{finding.severity.value}]** {finding.subject_id}: {finding.description} "
-                f"(requirements: {requirement_labels})"
+                f"- **[{finding.severity.value}]** {finding.subject_id}: {description} "
+                f"(requirements: {requirement_labels}){quote_suffix}"
             )
         lines.append("")
     return "\n".join(lines)
@@ -107,9 +145,24 @@ def render_markdown_report(result: PipelineResult, header: ArtifactHeader) -> st
     labels = build_requirement_labels([row.requirement_id for row in result.traceability])
     sections = [
         _header_section(header),
+        _generation_failures_section(result, labels),
         _traceability_section(result, labels),
-        _scenarios_section(result, labels),
+        _scenarios_section(result.strategy.scenarios, labels),
         _test_cases_section(result, labels),
         _review_section(result, labels),
+    ]
+    return "\n".join(section for section in sections if section)
+
+
+def render_strategy_markdown(strategy: TestStrategy, header: ArtifactHeader) -> str:
+    """Human-readable report for `generate strategy` — scenarios only, no
+    test cases or review, since that stage hasn't run yet. Kept separate from
+    `render_markdown_report` rather than passing a partially-populated
+    `PipelineResult`, since a strategy-only run has no suite or review to
+    fake placeholder values for."""
+    labels = build_requirement_labels([rid for s in strategy.scenarios for rid in s.requirement_ids])
+    sections = [
+        _header_section(header),
+        _scenarios_section(strategy.scenarios, labels),
     ]
     return "\n".join(sections)

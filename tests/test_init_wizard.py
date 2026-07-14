@@ -8,6 +8,7 @@ from driftpin.cli.init_wizard import (
     build_config,
     list_ollama_models,
     validate_groq_key,
+    validate_nvidia_key,
 )
 from driftpin.config.settings import ProviderKind
 from driftpin.providers.base import ProviderValidationError
@@ -24,6 +25,12 @@ def test_build_config_groq() -> None:
     config = build_config(ProviderKind.GROQ, model="llama-3.3-70b-versatile")
     assert config.provider.kind == ProviderKind.GROQ
     assert config.provider.model == "llama-3.3-70b-versatile"
+
+
+def test_build_config_nvidia() -> None:
+    config = build_config(ProviderKind.NVIDIA, model="nvidia/nemotron-3-ultra-550b-a55b")
+    assert config.provider.kind == ProviderKind.NVIDIA
+    assert config.provider.model == "nvidia/nemotron-3-ultra-550b-a55b"
 
 
 def test_build_config_ollama_with_base_url() -> None:
@@ -108,3 +115,34 @@ async def test_validate_groq_key_raises_on_bad_key(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(ProviderValidationError):
         await validate_groq_key("bad-key", "llama-3.3-70b-versatile")
+
+
+@pytest.mark.asyncio
+async def test_validate_nvidia_key_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
+    )
+
+    await validate_nvidia_key("test-key", "nvidia/nemotron-3-ultra-550b-a55b")  # should not raise
+
+
+@pytest.mark.asyncio
+async def test_validate_nvidia_key_raises_on_bad_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "invalid api key"})
+
+    monkeypatch.setattr(
+        "driftpin.providers.nvidia_provider.httpx.AsyncClient", _client_with_transport(handler)
+    )
+
+    with pytest.raises(ProviderValidationError):
+        await validate_nvidia_key("bad-key", "nvidia/nemotron-3-ultra-550b-a55b")

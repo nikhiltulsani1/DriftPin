@@ -8,6 +8,7 @@ import pytest
 from driftpin.cli.actions import (
     DocumentNotFoundError,
     EmptyRegistryError,
+    GenerationAbortedError,
     artifact_filename,
     derive_source_slug,
     open_registry,
@@ -17,7 +18,7 @@ from driftpin.cli.actions import (
 )
 from driftpin.config.settings import driftpin_dir
 from driftpin.providers.base import CompletionResult
-from driftpin.schemas.requirements import RegistryFile, Requirement, RiskTier
+from driftpin.schemas.requirements import AcceptanceCriterion, RegistryFile, Requirement, RiskTier
 
 
 def _write_registry(project_root: Path, requirements: list[Requirement]) -> None:
@@ -155,7 +156,7 @@ async def test_run_ingest_adds_requirements_and_saves_registry(
 async def test_run_generate_strategy_raises_on_empty_registry(tmp_path: Path, mock_provider_factory) -> None:
     provider = mock_provider_factory([])
     with pytest.raises(EmptyRegistryError):
-        await run_generate_strategy(provider, tmp_path)
+        await run_generate_strategy(provider, tmp_path, tmp_path / "out")
 
 
 @pytest.mark.asyncio
@@ -181,10 +182,79 @@ async def test_run_generate_strategy_reports_stage_progress(tmp_path: Path, mock
     )
 
     stages: list[str] = []
-    outcome = await run_generate_strategy(provider, tmp_path, on_stage=stages.append)
+    outcome = await run_generate_strategy(provider, tmp_path, tmp_path / "out", on_stage=stages.append)
 
-    assert stages == ["test-architect"]
+    assert stages == [
+        "consistency-checker",
+        "test-architect",
+        "test-architect (requirement coverage check)",
+    ]
     assert len(outcome.strategy.scenarios) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_generate_strategy_aborts_when_consistency_report_declined(
+    tmp_path: Path, mock_provider_factory
+) -> None:
+    """Declining the spec-consistency report must stop the pipeline before
+    test-architect ever runs -- an empty provider queue makes that
+    ordering self-verifying: if the architect call fired anyway, the mock
+    provider would raise its own queue-exhausted assertion instead."""
+    requirement = Requirement(
+        requirement_id="R-1",
+        title="A requirement",
+        description="A user may not set a budget of zero.",
+        source_span="A user may not set a budget of zero.",
+        source_doc_path="prd.md",
+        source_doc_hash="hash-a",
+        risk_tier=RiskTier.HIGH,
+        acceptance_criteria=[
+            AcceptanceCriterion(ac_id="AC-1", text="Budget entry field rejects values below 1.")
+        ],
+    )
+    _write_registry(tmp_path, [requirement])
+    provider = mock_provider_factory(
+        [CompletionResult(content=json.dumps({"verdict": "threshold_mismatch", "explanation": "Zero vs below 1."}), tokens_in=1, tokens_out=1, stop_reason="end_turn")]
+    )
+
+    with pytest.raises(GenerationAbortedError):
+        await run_generate_strategy(
+            provider, tmp_path, tmp_path / "out", on_consistency_report=lambda _report: False
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_generate_strategy_writes_json_and_markdown(tmp_path: Path, mock_provider_factory) -> None:
+    _write_registry(tmp_path, [_requirement()])
+    payload = {
+        "strategy_id": "strategy-run1",
+        "scenarios": [
+            {
+                "scenario_id": "S-1",
+                "title": "Scenario",
+                "requirement_ids": ["R-1"],
+                "owning_agent": "functional-tester",
+                "risk_tier": "high",
+                "execution_recommendation": "manual",
+                "recommendation_justification": "Low frequency, high setup cost.",
+            }
+        ],
+        "coverage_notes": "",
+    }
+    provider = mock_provider_factory(
+        [CompletionResult(content=json.dumps(payload), tokens_in=1, tokens_out=1, stop_reason="end_turn")]
+    )
+
+    out_dir = tmp_path / "out"
+    outcome = await run_generate_strategy(provider, tmp_path, out_dir)
+
+    assert outcome.strategy_path.exists()
+    assert outcome.strategy_path.suffix == ".json"
+    assert outcome.markdown_path.exists()
+    assert outcome.markdown_path.suffix == ".md"
+    markdown_text = outcome.markdown_path.read_text(encoding="utf-8")
+    assert "Req-1" in markdown_text
+    assert "R-1" not in markdown_text
 
 
 @pytest.mark.asyncio
@@ -213,12 +283,10 @@ async def test_run_generate_cases_writes_excel_and_markdown(tmp_path: Path, mock
         ],
         "coverage_notes": "",
     }
-    suite_payload = {
-        "suite_id": "suite-run1",
-        "strategy_id": "strategy-run1",
+    fill_payload = {
         "cases": [
             {
-                "case_id": "TC-1",
+                "case_id": "TC-placeholder",
                 "scenario_id": "S-1",
                 "requirement_ids": ["R-1"],
                 "title": "Case",
@@ -229,18 +297,12 @@ async def test_run_generate_cases_writes_excel_and_markdown(tmp_path: Path, mock
             }
         ],
     }
-    review_payload = {
-        "review_id": "review-run1",
-        "target_run_id": "run1",
-        "findings": [],
-        "passed": True,
-        "summary": "ok",
-    }
+    review_payload = {"findings": []}
 
     provider = mock_provider_factory(
         [
             CompletionResult(content=json.dumps(strategy_payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
-            CompletionResult(content=json.dumps(suite_payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
+            CompletionResult(content=json.dumps(fill_payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
             CompletionResult(content=json.dumps(review_payload), tokens_in=1, tokens_out=1, stop_reason="end_turn"),
         ]
     )
@@ -249,6 +311,14 @@ async def test_run_generate_cases_writes_excel_and_markdown(tmp_path: Path, mock
     out_dir = tmp_path / "out"
     outcome = await run_generate_cases(provider, tmp_path, out_dir, on_stage=stages.append)
 
-    assert stages == ["test-architect", "functional-tester", "reviewer"]
+    assert stages == [
+        "consistency-checker",
+        "test-architect",
+        "test-architect (requirement coverage check)",
+        "functional-tester (1/1: S-1)",
+        "reviewer (structural)",
+        "reviewer (semantic groups)",
+        "reviewer (fallback)",
+    ]
     assert outcome.excel_path.exists()
     assert outcome.markdown_path.exists()

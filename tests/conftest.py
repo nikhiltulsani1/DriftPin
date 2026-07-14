@@ -29,6 +29,7 @@ class MockProvider(LLMProvider):
         self._responses = list(responses)
         self._valid = valid
         self.call_count = 0
+        self.captured_systems: list[str] = []
 
     async def validate(self) -> None:
         if not self._valid:
@@ -58,6 +59,7 @@ class MockProvider(LLMProvider):
         system: str,
         json_schema: dict[str, Any],
     ) -> CompletionResult:
+        self.captured_systems.append(system)
         return self._next_response()
 
     def _next_response(self) -> CompletionResult:

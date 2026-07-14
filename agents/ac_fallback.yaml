@@ -1,0 +1,6 @@
+name: ac_fallback
+model_binding: null
+system_prompt: ac_fallback.md.j2
+tools: []
+output_schema: driftpin.schemas.requirements.ACFillResult
+max_iterations: 1

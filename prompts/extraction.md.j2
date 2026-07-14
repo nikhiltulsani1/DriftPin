@@ -7,6 +7,11 @@ Rules:
 3. Assign a `risk_tier` (critical, high, medium, low) based on the consequence of the requirement failing in production — payment, auth, and data-integrity behavior are typically critical or high; cosmetic behavior is typically low.
 4. `title` is a short label; `description` restates the requirement in your own words for readability, but `source_span` must remain the exact quote.
 5. Each document passage below is prefixed with its anchor in brackets, e.g. `[page 2]` or `[paragraph 5]`. Do not include the anchor prefix in `source_span`.
+6. Do NOT extract acceptance criteria — leave `acceptance_criteria` empty on every candidate. That is handled separately by a deterministic parser (and, only if that fails, a dedicated per-requirement call) after this call returns, specifically because asking one call to find every requirement AND correctly cross-reference every acceptance criterion back to the right one was found to silently drop most requirements under the combined load. Focus entirely on requirement bodies and NFRs.
+7. Separately, extract **non-functional requirements** (NFRs) into `candidate_nfrs` — performance, timing, reliability, security, or capacity constraints stated anywhere in the document (e.g. "response within 3 seconds end-to-end," "must support 99.9% uptime," "supports at least 10,000 concurrent users"). For each NFR, copy its `text` verbatim from the document, and set `scope`:
+   - `global` when it applies to the whole system or isn't tied to any one specific requirement (most NFR/performance sections read this way) — leave `applies_to_source_spans` empty.
+   - `scoped` when the document explicitly ties it to one or more specific requirements — set `applies_to_source_spans` to the exact `source_span` text of each requirement it applies to; each entry must match a `source_span` you extracted above character-for-character, or it won't link to anything.
+   A numeric or timing value that is itself the whole content of a requirement (not a separate performance constraint on top of one) belongs in that requirement's own `source_span`/`description`, not as a duplicate NFR.
 
 ## Finding ambiguities — do this as a deliberate second pass, not an afterthought
 

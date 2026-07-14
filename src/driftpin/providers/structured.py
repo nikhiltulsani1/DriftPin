@@ -63,17 +63,30 @@ async def complete_structured(
             return parsed, attempt
         except ValidationError as exc:
             last_error = str(exc)
+            if result.stop_reason == "length":
+                # A truncated response looks like a validation failure (the
+                # JSON is incomplete), but the fix is different: asking the
+                # model to "correct schema errors" is misleading when there
+                # were none — it simply ran out of room. Ask for the same
+                # content, more concisely, rather than feeding back a
+                # confusing validation error for JSON that was never finished.
+                correction = (
+                    "Your previous response was cut off before it finished — it hit the output "
+                    "length limit (finish_reason=length), not a formatting mistake. Return the "
+                    "same structured output again, but more concisely: shorter step descriptions, "
+                    "fewer optional details, or fewer cases if there are several, as long as the "
+                    "JSON is complete and still satisfies the schema."
+                )
+            else:
+                correction = (
+                    "That output failed schema validation with these errors:\n"
+                    f"{last_error}\n\n"
+                    "Return only a corrected JSON object satisfying the schema."
+                )
             working_messages = [
                 *working_messages,
                 Message(role="assistant", content=result.content),
-                Message(
-                    role="user",
-                    content=(
-                        "That output failed schema validation with these errors:\n"
-                        f"{last_error}\n\n"
-                        "Return only a corrected JSON object satisfying the schema."
-                    ),
-                ),
+                Message(role="user", content=correction),
             ]
 
     raise StructuredOutputError(attempts=max_retries + 1, last_error=last_error, raw_output=last_raw)

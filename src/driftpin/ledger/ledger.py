@@ -102,6 +102,24 @@ class RunLedger:
             )
         )
 
+    def record_agent_step(
+        self,
+        agent_name: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        """Records a per-run summary for a multi-call agent stage — e.g.
+        functional-tester's enumerate-then-fill pass — distinct from any
+        single LLM call. `metadata` carries whatever counters the stage
+        wants evidenced (scenarios_enumerated/filled/refilled/failed)."""
+        self.record(
+            LedgerEntry(
+                run_id=self.run_id,
+                entry_type=LedgerEntryType.AGENT_STEP,
+                agent_name=agent_name,
+                metadata=metadata,
+            )
+        )
+
     def record_tool_call(
         self,
         agent_name: str,

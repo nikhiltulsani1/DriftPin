@@ -11,17 +11,20 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from driftpin.agents.orchestrator import (
+    DEFAULT_FILL_CALL_DELAY_SECONDS,
     OnStage,
     PipelineResult,
     generate_strategy_only,
     run_pipeline,
 )
 from driftpin.config.settings import driftpin_dir
+from driftpin.consistency.checker import run_consistency_check
 from driftpin.ingestion.extractor import extract_requirements
 from driftpin.ingestion.parsers import parse_document
 from driftpin.ingestion.registry import RequirementRegistry, compute_doc_hash
@@ -29,7 +32,8 @@ from driftpin.ledger.ledger import RunLedger
 from driftpin.providers.base import LLMProvider
 from driftpin.render.excel import save_excel_workbook
 from driftpin.render.headers import build_header
-from driftpin.render.markdown import render_markdown_report
+from driftpin.render.markdown import render_markdown_report, render_strategy_markdown
+from driftpin.schemas.consistency import ConsistencyReport
 from driftpin.schemas.requirements import Requirement
 from driftpin.schemas.strategy import TestStrategy
 
@@ -45,6 +49,13 @@ class DocumentNotFoundError(Exception):
 
 class EmptyRegistryError(Exception):
     """Raised when a generation action is attempted against an empty requirement registry."""
+
+
+class GenerationAbortedError(Exception):
+    """Raised when the user declines to proceed past the spec-consistency
+    report. Not an error condition — the consistency findings are
+    informational by design; this is the pipeline honoring an explicit
+    human choice to stop and review ASSUMPTIONS.md first."""
 
 
 def new_run_id() -> str:
@@ -107,6 +118,9 @@ class IngestOutcome:
     doc_path: Path
     added_count: int
     ambiguity_count: int
+    acs_extracted_count: int = 0
+    zero_ac_requirement_ids: list[str] = field(default_factory=list)
+    unassigned_ac_count: int = 0
 
 
 @dataclass
@@ -144,11 +158,20 @@ async def run_ingest(
                 detail=f"Source span: {ambiguity.source_span}",
             )
 
+        for unassigned_ac in extraction.unassigned_acs:
+            ledger.record_assumption(
+                heading=f"{doc_path.name}: acceptance criterion could not be linked to a requirement",
+                detail=unassigned_ac,
+            )
+
         outcomes.append(
             IngestOutcome(
                 doc_path=doc_path,
                 added_count=len(added),
                 ambiguity_count=len(extraction.ambiguities),
+                acs_extracted_count=sum(len(r.acceptance_criteria) for r in added),
+                zero_ac_requirement_ids=[r.requirement_id for r in added if not r.acceptance_criteria],
+                unassigned_ac_count=len(extraction.unassigned_acs),
             )
         )
 
@@ -156,28 +179,86 @@ async def run_ingest(
     return IngestRunResult(run_id=run_id, ledger=ledger, outcomes=outcomes)
 
 
+async def _run_consistency_stage(
+    provider: LLMProvider,
+    registry: RequirementRegistry,
+    ledger: RunLedger,
+    on_stage: OnStage | None,
+    on_pair_count_check: Callable[[int], bool] | None,
+    on_consistency_report: Callable[[ConsistencyReport], bool] | None,
+) -> ConsistencyReport:
+    """Runs after ingestion (the registry already holds every requirement,
+    AC, and NFR) and before test-architect ever sees the registry — the
+    spec-internal-consistency question is answered once, up front, rather
+    than folded into any later review stage that only ever compares a
+    generated test case against the spec."""
+    if on_stage is not None:
+        on_stage("consistency-checker")
+    report = await run_consistency_check(
+        provider,
+        registry.requirements,
+        registry.nfrs,
+        ledger=ledger,
+        on_pair_count_check=on_pair_count_check,
+    )
+    if on_consistency_report is not None and not on_consistency_report(report):
+        raise GenerationAbortedError(
+            "User declined to proceed past the spec-consistency report — see ASSUMPTIONS.md."
+        )
+    return report
+
+
 @dataclass
 class StrategyRunResult:
     run_id: str
     ledger: RunLedger
     strategy: TestStrategy
+    strategy_path: Path
+    markdown_path: Path
+    consistency_report: ConsistencyReport
 
 
 async def run_generate_strategy(
     provider: LLMProvider,
     project_root: Path,
+    out_dir: Path,
     run_id: str | None = None,
     on_stage: OnStage | None = None,
+    on_pair_count_check: Callable[[int], bool] | None = None,
+    on_consistency_report: Callable[[ConsistencyReport], bool] | None = None,
 ) -> StrategyRunResult:
     registry = open_registry(project_root)
     require_nonempty_registry(registry)
 
     run_id = run_id or new_run_id()
     ledger = RunLedger(driftpin_dir(project_root), run_id=run_id)
+    consistency_report = await _run_consistency_stage(
+        provider, registry, ledger, on_stage, on_pair_count_check, on_consistency_report
+    )
     strategy = await generate_strategy_only(
         provider, registry.requirements, run_id=run_id, ledger=ledger, on_stage=on_stage
     )
-    return StrategyRunResult(run_id=run_id, ledger=ledger, strategy=strategy)
+
+    header = build_header(
+        run_id=run_id,
+        requirements=registry.requirements,
+        registry_version=registry.registry_version,
+    )
+    source_slug = derive_source_slug(registry.requirements)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    strategy_path = out_dir / artifact_filename("strategy", "json", source_slug=source_slug)
+    markdown_path = out_dir / artifact_filename("strategy", "md", source_slug=source_slug)
+    strategy_path.write_text(strategy.model_dump_json(indent=2), encoding="utf-8")
+    markdown_path.write_text(render_strategy_markdown(strategy, header), encoding="utf-8")
+
+    return StrategyRunResult(
+        run_id=run_id,
+        ledger=ledger,
+        strategy=strategy,
+        strategy_path=strategy_path,
+        markdown_path=markdown_path,
+        consistency_report=consistency_report,
+    )
 
 
 @dataclass
@@ -187,6 +268,7 @@ class CasesRunResult:
     result: PipelineResult
     excel_path: Path
     markdown_path: Path
+    consistency_report: ConsistencyReport
 
 
 async def run_generate_cases(
@@ -195,14 +277,28 @@ async def run_generate_cases(
     out_dir: Path,
     run_id: str | None = None,
     on_stage: OnStage | None = None,
+    on_scenario_count_check: Callable[[int], bool] | None = None,
+    on_pair_count_check: Callable[[int], bool] | None = None,
+    on_consistency_report: Callable[[ConsistencyReport], bool] | None = None,
+    fill_call_delay_seconds: float = DEFAULT_FILL_CALL_DELAY_SECONDS,
 ) -> CasesRunResult:
     registry = open_registry(project_root)
     require_nonempty_registry(registry)
 
     run_id = run_id or new_run_id()
     ledger = RunLedger(driftpin_dir(project_root), run_id=run_id)
+    consistency_report = await _run_consistency_stage(
+        provider, registry, ledger, on_stage, on_pair_count_check, on_consistency_report
+    )
     pipeline_result = await run_pipeline(
-        provider, registry.requirements, run_id=run_id, ledger=ledger, on_stage=on_stage
+        provider,
+        registry.requirements,
+        run_id=run_id,
+        ledger=ledger,
+        on_stage=on_stage,
+        on_scenario_count_check=on_scenario_count_check,
+        fill_call_delay_seconds=fill_call_delay_seconds,
+        nfrs=registry.nfrs,
     )
 
     header = build_header(
@@ -223,4 +319,5 @@ async def run_generate_cases(
         result=pipeline_result,
         excel_path=excel_path,
         markdown_path=markdown_path,
+        consistency_report=consistency_report,
     )

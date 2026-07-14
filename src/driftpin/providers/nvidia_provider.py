@@ -1,16 +1,16 @@
-"""Groq provider: OpenAI-compatible chat completions over Groq's hosted inference API.
+"""NVIDIA NIM provider: OpenAI-compatible chat completions over NVIDIA's
+hosted inference API (`integrate.api.nvidia.com`), e.g. Nemotron models.
 
-Structured output uses forced tool-calling, same strategy as the Anthropic
-provider — the schema is registered as a single function and `tool_choice`
-forces the model to call it, which is far more reliable on hosted models than
-asking for bare JSON in prose.
+Same integration shape as `GroqProvider` — direct `httpx` calls against an
+OpenAI-compatible `/chat/completions` endpoint, forced tool-calling for
+structured output — rather than pulling in the `openai` SDK as a dependency
+for one more provider that speaks the same wire format.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -29,20 +29,21 @@ from driftpin.providers.base import (
     ToolDefinition,
 )
 
-_DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
-_DEFAULT_TIMEOUT_SECONDS = 60.0
-_DEFAULT_MAX_TOKENS = 4096
+_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
+_DEFAULT_TIMEOUT_SECONDS = 600.0
+_DEFAULT_MAX_TOKENS = 16384
 _STRUCTURED_TOOL_NAME = "emit_structured_output"
-_MAX_RATE_LIMIT_RETRIES = 3
-_DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 10.0
-_RETRY_AFTER_PATTERN = re.compile(r"try again in ([\d.]+)s")
+_MAX_RATE_LIMIT_RETRIES = 5
+_RATE_LIMIT_BACKOFF_SECONDS = 15.0
 _MAX_GATEWAY_RETRIES = 2
 _GATEWAY_BACKOFF_SECONDS = 15.0
 _GATEWAY_STATUS_CODES = {502, 503, 504}
 _TOO_LARGE_MESSAGE_MARKERS = ("context length", "context_length", "maximum context", "too large", "reduce the length")
-# See nvidia_provider.py's identical constant for the full rationale: a
-# 502/503/504 body naming server-side capacity exhaustion needs patience,
-# never a split, and is checked before the payload-too-heavy counter below.
+# A 502/503/504 body matching one of these (case-insensitive) means the
+# provider's own capacity is exhausted — a shared worker pool or request
+# queue being full — not that our payload is too large. Checked BEFORE a
+# gateway error counts toward the payload-too-heavy threshold, since the
+# two failure modes need opposite remedies (patience vs. splitting).
 _SERVER_EXHAUSTION_PATTERNS = ("resourceexhausted", "worker", "request limit", "capacity", "overloaded", "quota")
 _MAX_SERVER_EXHAUSTED_RETRIES = 4
 _SERVER_EXHAUSTED_BACKOFF_SECONDS = 30.0
@@ -57,28 +58,20 @@ def _match_server_exhaustion_pattern(body_text: str) -> str | None:
     return None
 
 
-def _parse_retry_after_seconds(message: str) -> float:
-    match = _RETRY_AFTER_PATTERN.search(message)
-    if match:
-        return float(match.group(1))
-    return _DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
-
-
 def _raise_for_status_with_body(response: httpx.Response) -> None:
-    """`raise_for_status()` alone drops Groq's actual error message (status
-    code and generic reason phrase only) — the detail that actually explains
-    *why* a request failed lives in the JSON body. Re-raise with it attached.
+    """`raise_for_status()` alone drops NVIDIA's actual error message — the
+    detail that explains *why* a request failed lives in the JSON body.
 
     A request-too-large response (413, or a 400 naming a context/length
-    ceiling) is raised as `RequestTooLargeError` instead of the generic HTTP
-    error — retrying an oversized request unchanged can never succeed, so
-    callers need a distinguishable signal, not one that looks like any other
-    HTTP failure and might get blind-retried the same way a 429 is."""
+    ceiling) is raised as `RequestTooLargeError` instead — retrying an
+    oversized request unchanged can never succeed, so it needs a
+    distinguishable signal rather than looking like any other HTTP failure
+    that might get blind-retried the way a 503/504 capacity error is."""
     if response.status_code == 413 or (
         response.status_code == 400
         and any(marker in response.text.lower() for marker in _TOO_LARGE_MESSAGE_MARKERS)
     ):
-        raise RequestTooLargeError(f"Groq rejected the request as too large: {response.text}")
+        raise RequestTooLargeError(f"NVIDIA rejected the request as too large: {response.text}")
 
     try:
         response.raise_for_status()
@@ -90,8 +83,8 @@ def _raise_for_status_with_body(response: httpx.Response) -> None:
         ) from exc
 
 
-class GroqProvider(LLMProvider):
-    name = "groq"
+class NvidiaProvider(LLMProvider):
+    name = "nvidia"
 
     def __init__(self, api_key: str, model: str, base_url: str = _DEFAULT_BASE_URL) -> None:
         self.model = model
@@ -113,14 +106,14 @@ class GroqProvider(LLMProvider):
             )
             _raise_for_status_with_body(response)
         except httpx.HTTPError as exc:
-            raise ProviderValidationError(f"Groq validation failed: {exc}") from exc
+            raise ProviderValidationError(f"NVIDIA validation failed: {exc}") from exc
 
-    def _to_groq_messages(self, messages: list[Message], system: str) -> list[dict[str, Any]]:
+    def _to_nvidia_messages(self, messages: list[Message], system: str) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = [{"role": "system", "content": system}]
         result.extend({"role": m.role, "content": m.content} for m in messages)
         return result
 
-    def _to_groq_tools(self, tools: list[ToolDefinition]) -> list[dict[str, Any]]:
+    def _to_nvidia_tools(self, tools: list[ToolDefinition]) -> list[dict[str, Any]]:
         return [
             {
                 "type": "function",
@@ -134,18 +127,32 @@ class GroqProvider(LLMProvider):
         ]
 
     async def _post_with_retry(self, payload: dict[str, Any]) -> httpx.Response:
-        """Three distinct retry policies: 429 (rate limit, genuinely
-        transient — Groq's own Retry-After-style message tells us how long
-        to wait) gets the existing generous retry budget. A 502/503/504
-        whose body names server-side capacity exhaustion gets a long,
-        patient backoff and then a hard failure — never a split, since
-        splitting fires more requests into an already-exhausted pool. Any
-        other 502/503/504 gets a hard cap of `_MAX_GATEWAY_RETRIES` before
-        raising `PayloadTooHeavyError` instead of a further identical
-        retry — a caller that can shrink the payload (a smaller review
-        group) is better positioned to fix a systematic gateway timeout
-        than blind retrying is. Any other status is returned as-is for the
-        caller to interpret (different endpoints treat 400 differently)."""
+        """Three distinct retry policies, not one blind loop over "any error
+        that smells transient":
+
+        - 429 (rate limit, NVIDIA's own capacity ceiling — "Worker local
+          total request limit reached") is genuinely transient; waiting
+          actually helps, so it gets the more generous retry budget.
+        - 502/503/504 whose body names server-side capacity exhaustion (see
+          `_SERVER_EXHAUSTION_PATTERNS`) get a long, patient backoff and
+          then a hard failure — never a split. Live evidence: NVIDIA
+          returned 503 with body "ResourceExhausted: Worker local total
+          request limit reached (32/32)" on three consecutive identical-
+          payload attempts; this used to fall into the payload-too-heavy
+          path below, whose prescribed remedy (split the request smaller,
+          fire two requests instead of one) makes server-side exhaustion
+          *worse*, not better, since it adds load to an already-full pool.
+          This check runs BEFORE the payload-too-heavy counter below, so an
+          exhaustion-pattern body never counts toward that threshold.
+        - Any other 502/503/504 gets a hard cap of `_MAX_GATEWAY_RETRIES`.
+          Live testing separately found NVIDIA's reviewer call returning
+          504 three attempts in a row on the *same* payload shape with an
+          empty/unrelated body — not a transient blip, a systematic timeout
+          on that request's size. Beyond the cap this raises
+          `PayloadTooHeavyError` instead of trying a 4th identical request:
+          a caller that can shrink the payload (a smaller review group) is
+          far better positioned to fix this than blind retrying is.
+        """
         rate_limit_attempt = 0
         gateway_attempt = 0
         server_exhausted_attempt = 0
@@ -153,8 +160,7 @@ class GroqProvider(LLMProvider):
             response = await self._client.post("/chat/completions", json=payload)
 
             if response.status_code == 429 and rate_limit_attempt < _MAX_RATE_LIMIT_RETRIES:
-                message = response.json().get("error", {}).get("message", "")
-                await asyncio.sleep(_parse_retry_after_seconds(message))
+                await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
                 rate_limit_attempt += 1
                 continue
 
@@ -163,9 +169,9 @@ class GroqProvider(LLMProvider):
                 if matched_pattern is not None:
                     if server_exhausted_attempt >= _MAX_SERVER_EXHAUSTED_RETRIES:
                         raise ServerExhaustedError(
-                            f"Groq returned {response.status_code} on {server_exhausted_attempt + 1} "
+                            f"NVIDIA returned {response.status_code} on {server_exhausted_attempt + 1} "
                             f"consecutive attempts, body matching server-capacity-exhaustion pattern "
-                            f"'{matched_pattern}' — this is Groq's own capacity limit (a shared "
+                            f"'{matched_pattern}' — this is NVIDIA's own capacity limit (a shared "
                             "worker pool or request queue being full), not our payload. Retry later "
                             f"once its queue has cleared. Response body: {response.text}",
                             matched_pattern=matched_pattern,
@@ -180,7 +186,7 @@ class GroqProvider(LLMProvider):
 
                 if gateway_attempt >= _MAX_GATEWAY_RETRIES:
                     raise PayloadTooHeavyError(
-                        f"Groq returned {response.status_code} on {gateway_attempt + 1} "
+                        f"NVIDIA returned {response.status_code} on {gateway_attempt + 1} "
                         "consecutive attempts with an identical payload — treating this as a "
                         "systematic gateway timeout on this request's size, not a transient "
                         f"one. Response body: {response.text}"
@@ -221,10 +227,10 @@ class GroqProvider(LLMProvider):
         payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": _DEFAULT_MAX_TOKENS,
-            "messages": self._to_groq_messages(messages, system),
+            "messages": self._to_nvidia_messages(messages, system),
         }
         if tools:
-            payload["tools"] = self._to_groq_tools(tools)
+            payload["tools"] = self._to_nvidia_tools(tools)
 
         response = await self._post_with_retry(payload)
         _raise_for_status_with_body(response)
@@ -239,12 +245,12 @@ class GroqProvider(LLMProvider):
         payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": _DEFAULT_MAX_TOKENS,
-            "messages": self._to_groq_messages(messages, system),
+            "messages": self._to_nvidia_messages(messages, system),
             "stream": True,
             "stream_options": {"include_usage": True},
         }
         if tools:
-            payload["tools"] = self._to_groq_tools(tools)
+            payload["tools"] = self._to_nvidia_tools(tools)
 
         content_parts: list[str] = []
         tokens_in = 0
@@ -303,28 +309,11 @@ class GroqProvider(LLMProvider):
         payload = {
             "model": self.model,
             "max_tokens": _DEFAULT_MAX_TOKENS,
-            "messages": self._to_groq_messages(messages, system),
-            "tools": self._to_groq_tools([forced_tool]),
+            "messages": self._to_nvidia_messages(messages, system),
+            "tools": self._to_nvidia_tools([forced_tool]),
             "tool_choice": {"type": "function", "function": {"name": _STRUCTURED_TOOL_NAME}},
         }
         response = await self._post_with_retry(payload)
-
-        if response.status_code == 400:
-            error = response.json().get("error", {})
-            if error.get("code") == "tool_use_failed":
-                # The model produced a call Groq's backend couldn't parse into
-                # valid arguments. Surface the raw attempt as `content` rather
-                # than raising — providers.structured's retry loop treats
-                # unparseable content exactly like a schema-validation
-                # failure and re-prompts with the concrete error, which is
-                # the same recovery path a malformed-but-200 response gets.
-                return CompletionResult(
-                    content=error.get("failed_generation", ""),
-                    tokens_in=0,
-                    tokens_out=0,
-                    stop_reason="tool_use_failed",
-                )
-
         _raise_for_status_with_body(response)
         result = self._parse_response(response.json())
         if not result.tool_calls:

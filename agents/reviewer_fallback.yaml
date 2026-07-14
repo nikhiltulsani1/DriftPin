@@ -1,6 +1,6 @@
-name: reviewer
+name: reviewer_fallback
 model_binding: null
-system_prompt: reviewer.md.j2
+system_prompt: reviewer_fallback.md.j2
 tools: []
 output_schema: driftpin.schemas.review.GroupReviewResult
 max_iterations: 1
